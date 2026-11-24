@@ -15,6 +15,7 @@ pub const USER_STATE: u16 = 9;
 pub const TEXT_MESSAGE: u16 = 11;
 pub const PERMISSION_DENIED: u16 = 12;
 pub const CRYPT_SETUP: u16 = 15;
+pub const PERMISSION_QUERY: u16 = 20;
 pub const CODEC_VERSION: u16 = 21;
 pub const SERVER_CONFIG: u16 = 24;
 
@@ -202,6 +203,16 @@ pub struct CryptSetup {
     pub client_nonce: Option<Vec<u8>>,
     #[prost(bytes = "vec", optional, tag = "3")]
     pub server_nonce: Option<Vec<u8>>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct PermissionQuery {
+    #[prost(uint32, optional, tag = "1")]
+    pub channel_id: Option<u32>,
+    #[prost(uint32, optional, tag = "2")]
+    pub permissions: Option<u32>,
+    #[prost(bool, optional, tag = "3")]
+    pub flush: Option<bool>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]

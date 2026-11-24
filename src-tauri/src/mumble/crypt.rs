@@ -6,6 +6,7 @@ use aes::Aes128;
 
 const B: usize = 16;
 
+#[derive(Clone)]
 pub struct CryptState {
     cipher: Option<Aes128>,
     pub encrypt_iv: [u8; B],

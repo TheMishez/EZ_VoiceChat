@@ -3,6 +3,7 @@
 //! (we speak the classic voice packet format, which every server supports).
 pub mod crypt;
 pub mod proto;
+pub mod server;
 pub mod voice;
 
 use crate::session::{self, Channel, Cmd, User, View};

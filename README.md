@@ -18,6 +18,8 @@ Low-latency voice chat for Windows by EZGGco. One app that joins both **Mumble**
 | Default port | 64738 | 9987 |
 | Notes | Certificates are trusted on first use; you're warned if one changes | Unofficial open-source implementation; TeamSpeak 5/6-only servers are not supported |
 
+**Local test server:** Settings → *Local test server* runs a small Mumble-compatible server inside the app, for testing or a quick session on your network. It shows a security warning first (your IP is visible to everyone who joins, no admin tools or audit), so for everyday use the EZ server below is recommended.
+
 Want your own server? See [`server/`](server/) for the **EZ server**: a tuned Mumble server with a one-command Linode setup.
 
 ## Build
@@ -36,7 +38,8 @@ src-tauri/src/
   wasapi.rs     low-latency Windows audio (IAudioClient3), cpal fallback
   ptt.rs        Raw Input push-to-talk
   session.rs    shared server model (channels, users, chat) for both protocols
-  mumble/       Mumble: TLS control channel, UDP voice, OCB2 crypto, jitter buffer
+  mumble/       Mumble: TLS control channel, UDP voice, OCB2 crypto, jitter buffer,
+                and server.rs (the built-in local test server)
   ts.rs         TeamSpeak 3 via tsclientlib
 ui/             the app window
 server/         EZ server (Docker + Linode setup)

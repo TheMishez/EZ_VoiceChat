@@ -173,6 +173,39 @@ fn vc_latency() -> Value {
     audio::latency()
 }
 
+// ------------------------------------------------------------------ local test server
+
+#[tauri::command]
+fn srv_get() -> Value {
+    let s = mumble::server::settings();
+    json!({
+        "settings": s,
+        "accepted": s.accepted_terms >= mumble::server::TERMS_VERSION,
+        "status": mumble::server::status(),
+    })
+}
+
+#[tauri::command]
+fn srv_accept_terms() {
+    mumble::server::accept_terms();
+}
+
+#[tauri::command]
+fn srv_save(settings: mumble::server::Settings) {
+    mumble::server::save(settings);
+}
+
+#[tauri::command]
+async fn srv_start(settings: mumble::server::Settings) -> Result<Value, String> {
+    mumble::server::save(settings);
+    mumble::server::start()
+}
+
+#[tauri::command]
+async fn srv_stop() {
+    mumble::server::stop();
+}
+
 #[tauri::command]
 fn vc_mic_test(on: bool) {
     audio::set_mic_test(on);
@@ -251,6 +284,11 @@ pub fn run() {
             win_close,
             app_open_external,
             vc_latency,
+            srv_get,
+            srv_accept_terms,
+            srv_save,
+            srv_start,
+            srv_stop,
             app_quit,
         ])
         .setup(move |app| {

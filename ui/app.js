@@ -44,7 +44,7 @@ function modal(html, { wide = false, onClose } = {}) {
   back.innerHTML = `<div class="modal ${wide ? 'wide' : ''}">${html}</div>`;
   $('#modal-root').appendChild(back);
   const close = () => { back.remove(); document.removeEventListener('keydown', onKey, true); onClose && onClose(); };
-  const onKey = (e) => { if (e.key === 'Escape' && !recording) close(); };
+  const onKey = (e) => { if (e.key === 'Escape' && !recording && back === $('#modal-root').lastElementChild) close(); };
   document.addEventListener('keydown', onKey, true);
   back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
   $$('[data-close]', back).forEach((b) => (b.onclick = close));
@@ -338,6 +338,8 @@ async function openSettings() {
     <div class="field"><label>Latency (Opus frame size)</label><div class="seg" id="s-frame"><button data-f="10">10 ms (lowest delay)</button><button data-f="20">20 ms (more robust)</button></div></div>
     <div class="field"><label>Voice quality (bitrate)</label><select class="select" id="s-br">${[32000, 48000, 64000, 96000, 128000].map((b) => `<option value="${b}" ${b === st.bitrate ? 'selected' : ''}>${b / 1000} kbps${b === 64000 ? ' (recommended)' : ''}</option>`).join('')}</select></div>
     <label class="switch"><input type="checkbox" id="s-test"><span></span>Mic test (hear yourself)</label>
+    <div class="section">Local test server</div>
+    <div id="srv"></div>
     <div class="actions"><button class="btn primary" data-close>Done</button></div>`, { wide: true, onClose: () => { clearInterval(meterTimer); invoke('vc_mic_test', { on: false }); } });
   const el = m.el;
   const s = { ...st };
@@ -397,6 +399,7 @@ async function openSettings() {
     document.addEventListener('keydown', onKey, true);
     document.addEventListener('mousedown', onMouse, true);
   };
+  serverSection($('#srv', el));
   const meterTimer = setInterval(async () => {
     if (!el.isConnected) return;
     const l = await invoke('vc_levels');
@@ -405,6 +408,101 @@ async function openSettings() {
     $('#s-meter', el).classList.toggle('open', l.gate);
   }, 60);
 }
+
+/* ---------------- local test server ---------------- */
+const SERVER_WARNING = `
+  <h3>Before you host a server on this PC</h3>
+  <p class="small">The local server is meant for <b>testing and quick sessions</b>. It works, but it is not the safest way to host voice chat. Here's why:</p>
+  <ul class="warn-list">
+    <li><b>Everyone who joins sees your IP address.</b> Someone could use it to DDoS your internet connection (it happens a lot in competitive games) or roughly find where you live.</li>
+    <li><b>Letting people in from outside your home means port forwarding.</b> That opens a direct path from the internet to your gaming PC, instead of to a rented server with nothing personal on it.</li>
+    <li><b>It's a small, new server with no security audit.</b> It has no accounts, admin tools, bans or permissions. A password is the only thing keeping strangers out, so set one.</li>
+    <li><b>Its certificate is self-signed.</b> People joining get a "trust this server?" prompt and can't check it's really you the first time.</li>
+    <li><b>It only runs while your PC and the app are on</b>, and it uses your upload bandwidth and a little CPU while you play.</li>
+  </ul>
+  <p class="small">For everyday team voice, the <b>EZ server on a Linode</b> is the safer setup: your IP stays hidden and nothing on your PC is exposed.</p>
+  <label class="switch"><input type="checkbox" id="t-ok"><span></span>I understand these risks and want to use the local server anyway</label>
+  <div class="actions"><button class="btn ghost" id="t-linode">Set up an EZ server instead</button><div class="flex"></div><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="t-accept" disabled>Accept &amp; continue</button></div>`;
+
+function askServerTerms() {
+  return new Promise((resolve) => {
+    let ok = false;
+    const m = modal(SERVER_WARNING, { wide: true, onClose: () => resolve(ok) });
+    $('#t-ok', m.el).onchange = (e) => ($('#t-accept', m.el).disabled = !e.target.checked);
+    $('#t-linode', m.el).onclick = () => invoke('app_open_external', { url: 'https://github.com/TheMishez/EZ_VoiceChat/tree/main/server' });
+    $('#t-accept', m.el).onclick = async () => { await invoke('srv_accept_terms'); ok = true; m.close(); };
+  });
+}
+
+async function serverSection(host) {
+  let info = await invoke('srv_get');
+  const s = { ...info.settings };
+  const render = () => {
+    const st = info.status;
+    const on = st.running;
+    const who = st.users && st.users.length ? ` · ${st.users.length} connected: ${st.users.map(esc).join(', ')}` : ' · nobody connected yet';
+    const where = on ? (st.lan ? `Others on your network join <b>${esc(st.lanIp || 'your PC\'s IP')}:${st.port}</b> (Mumble). For people outside your home you'd also need to forward port ${st.port} TCP+UDP on your router.` : `Only this PC can join (127.0.0.1:${st.port}).`) : '';
+    host.innerHTML = `
+      <p class="small" style="margin:0 0 10px">Run a small Mumble server inside the app to test voice or host a quick session. ${info.accepted ? '' : '<b>Not recommended for regular use</b>: you\'ll see why before it starts.'}</p>
+      <div class="row" style="margin-bottom:12px"><span class="pill ${on ? 'connected' : 'idle'}"><i></i><span>${on ? 'Running on port ' + st.port + who : 'Off'}</span></span></div>
+      ${on ? `<p class="small" style="margin:0 0 12px">${where}</p>` : ''}
+      <div class="two">
+        <div class="field"><label>Server name</label><input class="input" id="v-name" value="${esc(s.name)}" maxlength="60" ${on ? 'disabled' : ''}></div>
+        <div class="field"><label>Port</label><input class="input" id="v-port" value="${s.port}" ${on ? 'disabled' : ''}></div>
+      </div>
+      <div class="field"><label>Who can join</label>
+        <div class="seg" id="v-lan"><button data-l="0" ${on ? 'disabled' : ''}>This PC only (testing)</button><button data-l="1" ${on ? 'disabled' : ''}>My network</button></div></div>
+      <p class="small" id="v-lan-note" style="margin:-6px 0 12px"></p>
+      <div class="field"><label>Join password ${s.lan ? '(strongly recommended)' : '(optional)'}</label><input class="input" id="v-pass" type="password" value="${esc(s.password)}" ${on ? 'disabled' : ''}></div>
+      <div class="row">
+        ${on ? '<button class="btn primary" id="v-join">Join my server</button><button class="btn danger" id="v-stop">Stop server</button>' : '<button class="btn primary" id="v-start">Start server</button>'}
+      </div>`;
+    $$('#v-lan button', host).forEach((b) => b.classList.toggle('on', Number(b.dataset.l) === (s.lan ? 1 : 0)));
+    $('#v-lan-note', host).textContent = s.lan ? 'Your IP address will be visible to everyone who joins. Windows may ask to allow EZ VoiceChat through the firewall.' : '';
+    if (on) {
+      $('#v-stop', host).onclick = async () => {
+        if (view && (view.host === '127.0.0.1' || view.host === 'localhost')) await invoke('vc_disconnect');
+        await invoke('srv_stop');
+        info = await invoke('srv_get');
+        render();
+      };
+      $('#v-join', host).onclick = () => {
+        connect({ id: 'local', kind: 'mumble', host: '127.0.0.1', port: String(st.port), nickname: profile.nickname || 'Host', password: s.password });
+        toast('Joining your local server');
+      };
+      return;
+    }
+    const read = () => {
+      s.name = $('#v-name', host).value;
+      s.port = Math.max(1024, Math.min(65535, Number($('#v-port', host).value.replace(/\D/g, '')) || 64738));
+      s.password = $('#v-pass', host).value;
+    };
+    $('#v-lan', host).onclick = (e) => { const b = e.target.closest('[data-l]'); if (!b) return; read(); s.lan = b.dataset.l === '1'; invoke('srv_save', { settings: s }); render(); };
+    $('#v-start', host).onclick = async () => {
+      read();
+      if (!info.accepted) {
+        const ok = await askServerTerms();
+        if (!ok) return;
+        info.accepted = true;
+      }
+      if (s.lan && !s.password && !confirm('Start without a password? Anyone on your network could join.')) return;
+      try {
+        info.status = await invoke('srv_start', { settings: s });
+        toast('Local server started');
+      } catch (e) {
+        toast(String(e), 'err');
+      }
+      render();
+    };
+  };
+  render();
+  serverRefresh = async () => {
+    if (!host.isConnected) return;
+    info = await invoke('srv_get');
+    if (info.status.running) render();
+  };
+}
+let serverRefresh = null;
 
 /* ---------------- wiring ---------------- */
 function bind() {
@@ -493,6 +591,7 @@ async function boot() {
     if (st.phase === 'disconnected' || st.phase === 'error') { if (!view) { activeBm = null; renderBookmarks(); } }
   });
   listen('vc-chat', addChat);
+  listen('srv-users', () => serverRefresh && serverRefresh());
   listen('vc-self', (x) => { me = x; renderSelf(); });
   listen('vc-talking', (t) => { talking = new Set(t.ids); meTalking = t.me; paintTalking(); });
   listen('vc-audio', (a) => {
