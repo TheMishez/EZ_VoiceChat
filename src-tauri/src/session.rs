@@ -68,6 +68,10 @@ pub trait VoiceSource: Send + Sync {
     /// Who is audible right now.
     fn talking(&self) -> Vec<u64>;
     fn set_volume(&self, user: u64, volume: f32);
+    /// Current jitter-buffer target in ms, when the protocol manages its own buffer.
+    fn jitter_ms(&self) -> Option<f32> {
+        None
+    }
 }
 
 static VIEW: Mutex<Option<View>> = parking_lot::const_mutex(None);

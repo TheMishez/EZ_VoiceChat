@@ -18,6 +18,40 @@ use std::sync::{mpsc, Arc, OnceLock};
 use std::time::Duration;
 
 pub const RATE: u32 = 48000;
+
+/// Device buffer delays of the open streams (f32 bits, ms) and whether low-latency mode is on.
+static IN_MS: AtomicU32 = AtomicU32::new(0);
+static OUT_MS: AtomicU32 = AtomicU32::new(0);
+static IN_LL: AtomicBool = AtomicBool::new(false);
+static OUT_LL: AtomicBool = AtomicBool::new(false);
+
+enum Stream {
+    #[allow(dead_code)]
+    Cpal(cpal::Stream),
+    #[cfg(windows)]
+    #[allow(dead_code)]
+    Low(crate::wasapi::Stream),
+}
+
+/// Delay estimate, built from measured parts (device buffers, jitter buffer, ping) plus the fixed
+/// costs of the codec and noise suppression.
+pub fn latency() -> Value {
+    let st = settings();
+    let frame = st.frame_ms.clamp(10, 20) as f32;
+    let (ping, kind) = crate::session::with_view(|v| (v.ping_ms, v.kind.clone())).unwrap_or((None, String::new()));
+    json!({
+        "input": f32::from_bits(IN_MS.load(Ordering::Relaxed)),
+        "output": f32::from_bits(OUT_MS.load(Ordering::Relaxed)),
+        "inputLow": IN_LL.load(Ordering::Relaxed),
+        "outputLow": OUT_LL.load(Ordering::Relaxed),
+        "frame": frame,
+        "codec": 2.5,
+        "ns": if st.noise_suppression { 10.0 } else { 0.0 },
+        "jitter": source().and_then(|s| s.jitter_ms()),
+        "ping": ping,
+        "kind": kind,
+    })
+}
 const BLOCK: usize = 480; // 10 ms
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -36,6 +70,8 @@ pub struct Settings {
     /// Opus frame length: 10 ms = lowest latency, 20 ms = a little more robust
     pub frame_ms: u32,
     pub bitrate: u32,
+    /// Ask Windows for its smallest audio period (about 3 ms instead of 10 ms).
+    pub low_latency: bool,
 }
 
 impl Default for Settings {
@@ -52,6 +88,7 @@ impl Default for Settings {
             output_volume: 1.0,
             frame_ms: 10,
             bitrate: 64000,
+            low_latency: true,
         }
     }
 }
@@ -86,7 +123,7 @@ pub fn set_settings(s: Settings) {
     let old = SETTINGS.lock().replace(s.clone());
     util::write_json(&settings_path(), &serde_json::to_value(&s).unwrap_or_default());
     crate::ptt::configure(s.mode == "ptt", &s.ptt_key);
-    let devices_changed = old.map(|o| o.input_device != s.input_device || o.output_device != s.output_device).unwrap_or(true);
+    let devices_changed = old.map(|o| o.input_device != s.input_device || o.output_device != s.output_device || o.low_latency != s.low_latency).unwrap_or(true);
     if devices_changed {
         rebuild();
     }
@@ -178,7 +215,7 @@ pub fn start() {
     std::thread::Builder::new()
         .name("vc-audio".into())
         .spawn(move || {
-            let mut streams: (Option<cpal::Stream>, Option<cpal::Stream>) = (None, None);
+            let mut streams: (Option<Stream>, Option<Stream>) = (None, None);
             loop {
                 streams.0 = None;
                 streams.1 = None;
@@ -259,6 +296,23 @@ struct Capture {
 }
 
 impl Capture {
+    fn new(in_ch: usize, rate: u32) -> Self {
+        Capture {
+            in_ch,
+            step: rate as f64 / RATE as f64,
+            pos: 0.0,
+            prev: 0.0,
+            pending: Vec::with_capacity(BLOCK * 8),
+            denoise: nnnoiseless::DenoiseState::new(),
+            ns_in: [0.0; BLOCK],
+            ns_out: [0.0; BLOCK],
+            frame: Vec::with_capacity(BLOCK * 4),
+            hang: 0,
+            ptt_tail: 0,
+            was_tx: false,
+        }
+    }
+
     fn push(&mut self, samples: &[f32]) {
         mmcss();
         // Mono, then (if needed) linear resampling to 48 kHz.
@@ -367,25 +421,37 @@ impl Capture {
     }
 }
 
-fn open_input(st: &Settings, tx: mpsc::Sender<()>) -> Result<cpal::Stream, String> {
+fn open_input(st: &Settings, tx: mpsc::Sender<()>) -> Result<Stream, String> {
+    #[cfg(windows)]
+    if st.low_latency {
+        let fail = Mutex::new(tx.clone());
+        let make = crate::wasapi::Make::Input(Box::new(|ch, rate| {
+            let mut cap = Capture::new(ch, rate);
+            Box::new(move |d: &[f32]| cap.push(d))
+        }));
+        match crate::wasapi::open(&st.input_device, make, move || {
+            let _ = fail.lock().send(());
+        }) {
+            Ok(s) => {
+                IN_MS.store(s.latency_ms.to_bits(), Ordering::Relaxed);
+                IN_LL.store(true, Ordering::Relaxed);
+                util::log(format!("microphone: low-latency mode, {:.1} ms period", s.period_ms));
+                return Ok(Stream::Low(s));
+            }
+            Err(e) => util::log(format!("microphone: low-latency mode unavailable ({e}), using standard mode")),
+        }
+    }
+    IN_LL.store(false, Ordering::Relaxed);
+    IN_MS.store(10f32.to_bits(), Ordering::Relaxed);
+    open_input_cpal(st, tx).map(Stream::Cpal)
+}
+
+fn open_input_cpal(st: &Settings, tx: mpsc::Sender<()>) -> Result<cpal::Stream, String> {
     let dev = find(true, &st.input_device).ok_or("no microphone")?;
     let def = dev.default_input_config().map_err(|e| e.to_string())?;
     let fmt = def.sample_format();
     let config = def.config();
-    let mut cap = Capture {
-        in_ch: config.channels as usize,
-        step: config.sample_rate as f64 / RATE as f64,
-        pos: 0.0,
-        prev: 0.0,
-        pending: Vec::with_capacity(BLOCK * 8),
-        denoise: nnnoiseless::DenoiseState::new(),
-        ns_in: [0.0; BLOCK],
-        ns_out: [0.0; BLOCK],
-        frame: Vec::with_capacity(BLOCK * 4),
-        hang: 0,
-        ptt_tail: 0,
-        was_tx: false,
-    };
+    let mut cap = Capture::new(config.channels as usize, config.sample_rate);
     let err_tx = Mutex::new(tx);
     let err = move |e: cpal::Error| {
         util::log(format!("microphone error: {e}"));
@@ -424,6 +490,10 @@ struct Playback {
 }
 
 impl Playback {
+    fn new(out_ch: usize, rate: u32) -> Self {
+        Playback { out_ch, step: RATE as f64 / rate as f64, pos: 0.0, src: Vec::with_capacity(48000), tmp: Vec::with_capacity(48000) }
+    }
+
     fn render48(&mut self, frames: usize) {
         let start = self.src.len();
         self.src.resize(start + frames * 2, 0.0);
@@ -498,19 +568,38 @@ fn write_out(out: &mut [f32], ch: usize, stereo: &[f32]) {
     }
 }
 
-fn open_output(st: &Settings, tx: mpsc::Sender<()>) -> Result<cpal::Stream, String> {
+fn open_output(st: &Settings, tx: mpsc::Sender<()>) -> Result<Stream, String> {
+    #[cfg(windows)]
+    if st.low_latency {
+        let fail = Mutex::new(tx.clone());
+        let make = crate::wasapi::Make::Output(Box::new(|ch, rate| {
+            let mut pb = Playback::new(ch, rate);
+            Box::new(move |d: &mut [f32]| pb.fill(d))
+        }));
+        match crate::wasapi::open(&st.output_device, make, move || {
+            let _ = fail.lock().send(());
+        }) {
+            Ok(s) => {
+                OUT_MS.store(s.latency_ms.to_bits(), Ordering::Relaxed);
+                OUT_LL.store(true, Ordering::Relaxed);
+                util::log(format!("speakers: low-latency mode, {:.1} ms period, {:.1} ms buffer", s.period_ms, s.latency_ms));
+                return Ok(Stream::Low(s));
+            }
+            Err(e) => util::log(format!("speakers: low-latency mode unavailable ({e}), using standard mode")),
+        }
+    }
+    OUT_LL.store(false, Ordering::Relaxed);
+    OUT_MS.store(20f32.to_bits(), Ordering::Relaxed);
+    open_output_cpal(st, tx).map(Stream::Cpal)
+}
+
+fn open_output_cpal(st: &Settings, tx: mpsc::Sender<()>) -> Result<cpal::Stream, String> {
     let dev = find(false, &st.output_device).ok_or("no speakers")?;
     // Windows converts 48 kHz stereo to whatever the device runs at; if that's refused, use the
     // device's own format and convert here.
     let wanted = cpal::StreamConfig { channels: 2, sample_rate: RATE, buffer_size: cpal::BufferSize::Default };
     let attempt = |config: cpal::StreamConfig, tx: mpsc::Sender<()>| -> Result<cpal::Stream, String> {
-        let mut pb = Playback {
-            out_ch: config.channels as usize,
-            step: RATE as f64 / config.sample_rate as f64,
-            pos: 0.0,
-            src: Vec::with_capacity(48000),
-            tmp: Vec::with_capacity(48000),
-        };
+        let mut pb = Playback::new(config.channels as usize, config.sample_rate);
         let err_tx = Mutex::new(tx);
         let err = move |e: cpal::Error| {
             util::log(format!("speaker error: {e}"));

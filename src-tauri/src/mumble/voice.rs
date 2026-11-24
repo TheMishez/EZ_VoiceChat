@@ -7,6 +7,7 @@
 use crate::session::{VoiceSink, VoiceSource};
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -174,25 +175,55 @@ struct Talker {
     last_packet: Instant,
     volume: f32,
     tmp: Vec<f32>,
+    /// Lowest "arrival time minus send time" seen this talk spurt (ms). Packets later than this
+    /// were delayed by the network; how much later is the jitter.
+    base: Option<f64>,
+    /// Recent worst jitter (ms): jumps up at once, then eases down about 3 ms per second.
+    peak: f32,
+    last_update: Instant,
+    /// Samples per packet from this talker (10 or 20 ms).
+    packet: usize,
+    skip: u32,
 }
 
-/// Jitter buffer: starts playing a talker after ~30 ms, re-buffers after an underrun, conceals
-/// small packet losses with Opus PLC, and drops audio that's more than 200 ms behind.
+impl Talker {
+    /// How much audio to hold before playing: one packet, plus the recent jitter, plus a little
+    /// room for the speaker callback. About 15 ms on a clean connection.
+    fn target(&self) -> usize {
+        let ms = self.packet as f32 / 48.0 + self.peak + 4.0;
+        ((ms * 48.0) as usize).clamp(FRAME + FRAME / 4, MAX_SAMPLES / 2)
+    }
+}
+
+/// Adaptive jitter buffer. Each talker's buffer follows that talker's measured network jitter:
+/// a clean connection plays after ~15 ms, a jittery one waits as long as it needs to stop
+/// crackling. Underruns raise the target; a buffer that has grown too big is drained by playing
+/// 1% faster. Small losses are concealed with Opus PLC; audio over 300 ms behind is dropped.
 pub struct Mixer {
     talkers: Mutex<HashMap<u32, Talker>>,
     volumes: Mutex<HashMap<u32, f32>>,
+    epoch: Instant,
+    /// Last jitter-buffer target (ms, f32 bits), shown in the app.
+    last_target: AtomicU32,
 }
 
-const START_SAMPLES: usize = FRAME * 3;
-const MAX_SAMPLES: usize = FRAME * 20;
+const MAX_SAMPLES: usize = FRAME * 30;
+const START_PEAK_MS: f32 = 10.0;
+const MAX_PEAK_MS: f32 = 250.0;
 
 impl Mixer {
     pub fn new() -> Self {
-        Mixer { talkers: Mutex::new(HashMap::new()), volumes: Mutex::new(HashMap::new()) }
+        Mixer {
+            talkers: Mutex::new(HashMap::new()),
+            volumes: Mutex::new(HashMap::new()),
+            epoch: Instant::now(),
+            last_target: AtomicU32::new(((FRAME as f32 / 48.0) + START_PEAK_MS + 4.0).to_bits()),
+        }
     }
 
     pub fn push(&self, session: u32, seq: u64, opus: &[u8], last: bool) {
         let vol = self.volumes.lock().get(&session).copied().unwrap_or(1.0);
+        let now = Instant::now();
         let mut map = self.talkers.lock();
         let t = match map.get_mut(&session) {
             Some(t) => t,
@@ -206,9 +237,14 @@ impl Mixer {
                         next_seq: None,
                         buffering: true,
                         ended: false,
-                        last_packet: Instant::now(),
+                        last_packet: now,
                         volume: vol,
                         tmp: vec![0.0; FRAME * 12],
+                        base: None,
+                        peak: START_PEAK_MS,
+                        last_update: now,
+                        packet: FRAME,
+                        skip: 0,
                     },
                 );
                 map.get_mut(&session).unwrap()
@@ -220,7 +256,21 @@ impl Mixer {
             t.next_seq = Some(seq);
             t.buffering = true;
             t.ended = false;
+            t.base = None;
         }
+        // Jitter: how much later than the earliest packet (relative to its sequence number) this
+        // one arrived. The base creeps up slowly so a lasting route change isn't counted forever.
+        let dt = now.duration_since(t.last_update).as_secs_f32();
+        t.last_update = now;
+        let transit = now.duration_since(self.epoch).as_secs_f64() * 1000.0 - seq as f64 * 10.0;
+        let base = match t.base {
+            Some(b) => transit.min(b + dt as f64 * 2.0),
+            None => transit,
+        };
+        t.base = Some(base);
+        let jitter = ((transit - base) as f32).clamp(0.0, MAX_PEAK_MS);
+        t.peak = (t.peak - dt * 3.0).max(0.0).max(jitter);
+
         let expected = t.next_seq.unwrap_or(seq);
         if seq < expected {
             return; // late or duplicate
@@ -240,16 +290,20 @@ impl Mixer {
                 if let Ok(got) = t.dec.decode_float(Some(pkt), out, false) {
                     t.fifo.extend(t.tmp[..got].iter().copied());
                     t.next_seq = Some(seq + (got / FRAME).max(1) as u64);
+                    if got >= FRAME {
+                        t.packet = got;
+                    }
                 }
             }
         }
         while t.fifo.len() > MAX_SAMPLES {
             t.fifo.pop_front();
         }
-        t.last_packet = Instant::now();
+        t.last_packet = now;
         if last {
             t.ended = true;
         }
+        self.last_target.store((t.target() as f32 / 48.0).to_bits(), Ordering::Relaxed);
     }
 
     pub fn remove(&self, session: u32) {
@@ -267,13 +321,23 @@ impl VoiceSource for Mixer {
         let mut map = self.talkers.lock();
         map.retain(|_, t| !(t.fifo.is_empty() && t.last_packet.elapsed() > Duration::from_secs(5)));
         for t in map.values_mut() {
+            let target = t.target();
             if t.buffering {
-                if t.fifo.len() < START_SAMPLES && !t.ended {
+                if t.fifo.len() < target && !t.ended {
                     continue;
                 }
                 t.buffering = false;
             }
+            // Too much audio queued (the network calmed down): catch up by playing 1% faster.
+            let catch_up = t.fifo.len() > target + FRAME * 3;
             for f in 0..frames {
+                if catch_up {
+                    t.skip += 1;
+                    if t.skip >= 100 {
+                        t.skip = 0;
+                        t.fifo.pop_front();
+                    }
+                }
                 match t.fifo.pop_front() {
                     Some(v) => {
                         let v = v * t.volume;
@@ -282,13 +346,19 @@ impl VoiceSource for Mixer {
                     }
                     None => {
                         if !t.ended {
-                            t.buffering = true; // underrun: wait for a little more audio
+                            // Underrun: the buffer was too small for this connection.
+                            t.buffering = true;
+                            t.peak = (t.peak + 10.0).min(MAX_PEAK_MS);
                         }
                         break;
                     }
                 }
             }
         }
+    }
+
+    fn jitter_ms(&self) -> Option<f32> {
+        Some(f32::from_bits(self.last_target.load(Ordering::Relaxed)))
     }
 
     fn talking(&self) -> Vec<u64> {

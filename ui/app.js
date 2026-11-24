@@ -175,8 +175,10 @@ function renderView() {
     `<span class="tag">${esc(view.host)}</span>`,
     `<span class="tag ${view.ping_ms != null && view.ping_ms < 60 ? 'good' : ''}">ping ${ping}</span>`,
     view.kind === 'mumble' ? `<span class="tag ${view.udp ? 'good' : 'warn'}">${view.udp ? 'UDP voice' : 'TCP voice (UDP blocked?)'}</span>` : '',
-    `<span class="tag">${users} online</span>`
+    `<span class="tag">${users} online</span>`,
+    `<span class="tag" id="lat-tag"></span>`
   ].join('');
+  paintLatency();
   const mine = view.users[view.me];
   $('#me-name').textContent = mine ? mine.name : profile.nickname;
   $('#me-avatar').textContent = initials(mine ? mine.name : profile.nickname);
@@ -239,6 +241,37 @@ function renderWelcome() {
   $('#w-host').onclick = () => invoke('app_open_external', { url: 'https://github.com/TheMishez/EZ_VoiceChat/tree/main/server' });
 }
 
+/* ---------------- voice delay readout ---------------- */
+let lat = null;
+// Mouth-to-ear estimate for your voice reaching a teammate with a similar connection: your
+// device buffer + noise suppression + Opus frame + network (your ping covers you->server and
+// server->them) + their jitter buffer + their output buffer. Device buffers, ping and the jitter
+// buffer are measured live; the codec and noise suppression costs are fixed.
+function paintLatency() {
+  const el = $('#lat-tag');
+  if (!el || !lat) return;
+  const r = (x) => Math.round(x * 10) / 10;
+  const ts = lat.kind === 'ts3';
+  const jitter = lat.jitter != null ? lat.jitter : (ts ? 40 : 15);
+  const ping = lat.ping != null ? lat.ping : 0;
+  const parts = [
+    ['Mic buffer', lat.input, lat.inputLow ? 'low-latency' : 'standard'],
+    ['Noise suppression', lat.ns, ''],
+    ['Opus frame + lookahead', lat.frame + lat.codec, ''],
+    ['Network (ping)', ping, lat.ping == null ? 'not measured yet' : ''],
+    ['Jitter buffer', jitter, ts ? 'TS3 library buffer, estimated' : 'adaptive'],
+    ['Output buffer', lat.output, lat.outputLow ? 'low-latency' : 'standard']
+  ];
+  const total = parts.reduce((a, p) => a + p[1], 0);
+  el.textContent = `voice delay ≈ ${Math.round(total)} ms`;
+  el.className = 'tag ' + (total < 70 ? 'good' : total < 120 ? '' : 'warn');
+  el.title = parts.map((p) => `${p[0]}: ${r(p[1])} ms${p[2] ? ' (' + p[2] + ')' : ''}`).join('\n') + '\n\nEstimate for a teammate with a connection like yours.';
+}
+setInterval(async () => {
+  if (!view) return;
+  try { lat = await invoke('vc_latency'); paintLatency(); } catch (_) {}
+}, 1000);
+
 /* ---------------- status / chat ---------------- */
 function setStatus(st) {
   const pill = $('#status');
@@ -300,6 +333,8 @@ async function openSettings() {
     <div class="field"><label>Microphone volume <span class="small" id="s-gain-v"></span></label><input type="range" id="s-gain" min="0" max="3" step="0.05" value="${st.input_gain}"></div>
     <div class="field"><label>Output volume <span class="small" id="s-vol-v"></span></label><input type="range" id="s-vol" min="0" max="2" step="0.05" value="${st.output_volume}"></div>
     <div class="section">Quality</div>
+    <label class="switch"><input type="checkbox" id="s-ll" ${st.low_latency ? 'checked' : ''}><span></span>Low-latency audio mode</label>
+    <p class="small" id="s-ll-info" style="margin:2px 0 12px">Uses the smallest audio buffers Windows allows. Turn off if you hear crackling.</p>
     <div class="field"><label>Latency (Opus frame size)</label><div class="seg" id="s-frame"><button data-f="10">10 ms (lowest delay)</button><button data-f="20">20 ms (more robust)</button></div></div>
     <div class="field"><label>Voice quality (bitrate)</label><select class="select" id="s-br">${[32000, 48000, 64000, 96000, 128000].map((b) => `<option value="${b}" ${b === st.bitrate ? 'selected' : ''}>${b / 1000} kbps${b === 64000 ? ' (recommended)' : ''}</option>`).join('')}</select></div>
     <label class="switch"><input type="checkbox" id="s-test"><span></span>Mic test (hear yourself)</label>
@@ -329,6 +364,13 @@ async function openSettings() {
   $('#s-gain', el).oninput = (e) => { s.input_gain = Number(e.target.value); $('#s-gain-v', el).textContent = pct(s.input_gain); save(); };
   $('#s-vol', el).oninput = (e) => { s.output_volume = Number(e.target.value); $('#s-vol-v', el).textContent = pct(s.output_volume); save(); };
   $('#s-ns', el).onchange = (e) => { s.noise_suppression = e.target.checked; save(); };
+  const llInfo = async () => {
+    const l = await invoke('vc_latency');
+    const f = (x, low) => `${Math.round(x * 10) / 10} ms${low ? '' : ' (standard)'}`;
+    $('#s-ll-info', el).textContent = `Mic buffer ${f(l.input, l.inputLow)} · Output buffer ${f(l.output, l.outputLow)}. Turn off if you hear crackling.`;
+  };
+  llInfo();
+  $('#s-ll', el).onchange = async (e) => { s.low_latency = e.target.checked; await save(); setTimeout(llInfo, 800); };
   $('#s-br', el).onchange = (e) => { s.bitrate = Number(e.target.value); save(); toast('Applies the next time you connect'); };
   $('#s-rel', el).onchange = (e) => { s.ptt_release_ms = Math.max(0, Math.min(1000, Number(e.target.value) || 0)); save(); };
   $('#s-test', el).onchange = (e) => invoke('vc_mic_test', { on: e.target.checked });

@@ -9,6 +9,8 @@ mod ptt;
 mod session;
 mod ts;
 mod util;
+#[cfg(windows)]
+mod wasapi;
 
 use serde_json::{json, Value};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -167,6 +169,11 @@ fn vc_levels() -> Value {
 }
 
 #[tauri::command]
+fn vc_latency() -> Value {
+    audio::latency()
+}
+
+#[tauri::command]
 fn vc_mic_test(on: bool) {
     audio::set_mic_test(on);
 }
@@ -243,6 +250,7 @@ pub fn run() {
             win_max,
             win_close,
             app_open_external,
+            vc_latency,
             app_quit,
         ])
         .setup(move |app| {

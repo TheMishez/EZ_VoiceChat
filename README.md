@@ -2,6 +2,9 @@
 
 Low-latency voice chat for Windows by EZGGco. One app that joins both **Mumble** and **TeamSpeak 3** servers.
 
+- **Low-latency audio mode**: asks Windows for its smallest audio buffers (about 3 ms instead of 10 ms) without locking other apps out of your device.
+- **Adaptive jitter buffer**: plays after ~15 ms on a clean connection and only grows when the network is actually jittery.
+- **Live voice-delay readout** next to the ping, with a per-stage breakdown on hover.
 - **Opus voice** at 10 ms frames (20 ms optional), 64 kbps by default, up to 128 kbps.
 - **RNNoise noise suppression**, voice activation with a live level meter, or push-to-talk.
 - **Push-to-talk through Raw Input**: no keyboard hooks, no added input lag, and the key still reaches your game. Mouse 3–5 work.
@@ -30,6 +33,7 @@ npx tauri build
 ```
 src-tauri/src/
   audio.rs      capture, RNNoise, VAD/PTT gate, playback mixer
+  wasapi.rs     low-latency Windows audio (IAudioClient3), cpal fallback
   ptt.rs        Raw Input push-to-talk
   session.rs    shared server model (channels, users, chat) for both protocols
   mumble/       Mumble: TLS control channel, UDP voice, OCB2 crypto, jitter buffer
