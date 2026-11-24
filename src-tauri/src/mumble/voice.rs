@@ -184,6 +184,9 @@ struct Talker {
     /// Samples per packet from this talker (10 or 20 ms).
     packet: usize,
     skip: u32,
+    /// Packets received / lost recently (halved every report, so it follows the last few s).
+    recv: f32,
+    lost: f32,
 }
 
 impl Talker {
@@ -245,6 +248,8 @@ impl Mixer {
                         last_update: now,
                         packet: FRAME,
                         skip: 0,
+                        recv: 0.0,
+                        lost: 0.0,
                     },
                 );
                 map.get_mut(&session).unwrap()
@@ -276,6 +281,8 @@ impl Mixer {
             return; // late or duplicate
         }
         // Lost packets: let Opus conceal up to 60 ms.
+        t.recv += 1.0;
+        t.lost += (seq - expected).min(50) as f32;
         let gap = (seq - expected).min(6) as usize;
         if gap > 0 {
             let n = gap * FRAME;
@@ -355,6 +362,19 @@ impl VoiceSource for Mixer {
                 }
             }
         }
+    }
+
+    fn quality(&self) -> Vec<(u64, f32, f32)> {
+        let mut map = self.talkers.lock();
+        let mut out = Vec::new();
+        for (id, t) in map.iter_mut() {
+            if t.recv >= 20.0 && t.last_packet.elapsed() < Duration::from_secs(10) {
+                out.push((*id as u64, 100.0 * t.lost / (t.recv + t.lost), t.peak));
+            }
+            t.recv *= 0.5;
+            t.lost *= 0.5;
+        }
+        out
     }
 
     fn jitter_ms(&self) -> Option<f32> {

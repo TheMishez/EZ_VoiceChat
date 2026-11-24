@@ -72,6 +72,10 @@ pub trait VoiceSource: Send + Sync {
     fn jitter_ms(&self) -> Option<f32> {
         None
     }
+    /// Recent packet loss (%) and jitter (ms) for each person you've heard lately.
+    fn quality(&self) -> Vec<(u64, f32, f32)> {
+        Vec::new()
+    }
 }
 
 static VIEW: Mutex<Option<View>> = parking_lot::const_mutex(None);

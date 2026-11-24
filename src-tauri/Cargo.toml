@@ -18,6 +18,7 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-autostart = "2"
+ureq = { version = "2.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 parking_lot = "0.12"
@@ -44,6 +45,9 @@ tsproto-packets = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Registry",
+  "Win32_UI_HiDpi",
   "Win32_System_LibraryLoader",
   "Win32_System_Threading",
   "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging",

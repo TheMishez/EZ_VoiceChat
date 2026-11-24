@@ -177,3 +177,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .hk .key-btn { min-width: 150px; }
 .user.lmuted .name { color: var(--muted); text-decoration: line-through; }
 .user .st span { display: inline-flex; color: var(--muted); }
+.upd { height: 26px; padding: 0 12px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-weight: 700; font-size: 12px; cursor: pointer; }
+.upd:disabled { cursor: default; opacity: .8; }
+.user .q { display: inline-flex; }
+.user .q svg { width: 14px; height: 14px; }
+.user .q.warn { color: var(--warn); }
+.user .q.bad { color: var(--bad); }
+.invite-box { display: flex; gap: 8px; }
+.invite-box input { flex: 1; font-size: 12px; }
+.corner-seg button { font-size: 12px; }

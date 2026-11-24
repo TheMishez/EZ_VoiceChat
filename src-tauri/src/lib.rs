@@ -7,7 +7,9 @@ mod keys;
 mod mumble;
 mod ptt;
 mod session;
+mod overlay;
 mod ts;
+mod updater;
 mod util;
 #[cfg(windows)]
 mod wasapi;
@@ -97,7 +99,7 @@ pub fn toggle_deaf() {
     set_self(!d, !d);
 }
 
-fn quit() {
+pub fn quit() {
     session::send(session::Cmd::Disconnect);
     std::thread::sleep(std::time::Duration::from_millis(250));
     util::app().exit(0);
@@ -198,6 +200,75 @@ fn vc_latency() -> Value {
 
 // ------------------------------------------------------------------ local test server
 
+// ------------------------------------------------------------------ overlay, updates, invites
+
+#[tauri::command]
+fn ov_get() -> Value {
+    overlay::config_json()
+}
+
+#[tauri::command]
+fn ov_set(settings: overlay::Settings) {
+    overlay::set_settings(settings);
+}
+
+#[tauri::command]
+fn upd_state() -> Value {
+    updater::state()
+}
+
+#[tauri::command]
+async fn upd_check() -> Value {
+    updater::check()
+}
+
+#[tauri::command]
+fn upd_install() -> bool {
+    updater::install()
+}
+
+/// An ezvc:// invite the app was started with (or received) that the page hasn't shown yet.
+static PENDING_INVITE: parking_lot::Mutex<Option<String>> = parking_lot::const_mutex(None);
+
+#[tauri::command]
+fn vc_take_invite() -> Option<String> {
+    PENDING_INVITE.lock().take()
+}
+
+fn invite_from_args<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
+    args.into_iter().find(|a| a.to_ascii_lowercase().starts_with("ezvc://")).map(|a| a.chars().take(2000).collect())
+}
+
+/// Invites are only ever shown to you to confirm; nothing joins on its own.
+fn handle_invite(url: String) {
+    *PENDING_INVITE.lock() = Some(url.clone());
+    show_main();
+    util::emit("vc-invite", url);
+}
+
+/// Makes ezvc:// links open this app (per-user, refreshed every start so it follows updates).
+#[cfg(windows)]
+fn register_scheme() {
+    use windows_sys::Win32::System::Registry::*;
+    let Ok(exe) = std::env::current_exe() else { return };
+    let exe = exe.to_string_lossy().to_string();
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let set = |key: &str, name: &str, value: &str| unsafe {
+        let mut h: HKEY = std::ptr::null_mut();
+        let k = wide(key);
+        if RegCreateKeyExW(HKEY_CURRENT_USER, k.as_ptr(), 0, std::ptr::null(), REG_OPTION_NON_VOLATILE, KEY_WRITE, std::ptr::null(), &mut h, std::ptr::null_mut()) == 0 {
+            let n = wide(name);
+            let v = wide(value);
+            RegSetValueExW(h, if name.is_empty() { std::ptr::null() } else { n.as_ptr() }, 0, REG_SZ, v.as_ptr() as *const u8, (v.len() * 2) as u32);
+            RegCloseKey(h);
+        }
+    };
+    set(r"Software\Classes\ezvc", "", "URL:EZ VoiceChat invite");
+    set(r"Software\Classes\ezvc", "URL Protocol", "");
+    set(r"Software\Classes\ezvc\DefaultIcon", "", &format!("\"{exe}\",0"));
+    set(r"Software\Classes\ezvc\shell\open\command", "", &format!("\"{exe}\" \"%1\""));
+}
+
 #[tauri::command]
 fn app_get_autostart() -> bool {
     use tauri_plugin_autostart::ManagerExt;
@@ -296,7 +367,10 @@ fn app_quit() {
 pub fn run() {
     let hidden = std::env::args().any(|a| a == "--hidden");
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|_a, _args, _cwd| show_main()))
+        .plugin(tauri_plugin_single_instance::init(|_a, args, _cwd| match invite_from_args(args) {
+            Some(url) => handle_invite(url),
+            None => show_main(),
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         // Push-to-talk registers its own Raw Input; the window library must not take it over.
@@ -323,6 +397,12 @@ pub fn run() {
             vc_latency,
             srv_get,
             app_get_autostart,
+            ov_get,
+            ov_set,
+            upd_state,
+            upd_check,
+            upd_install,
+            vc_take_invite,
             app_set_autostart,
             srv_accept_terms,
             srv_save,
@@ -335,6 +415,13 @@ pub fn run() {
             std::panic::set_hook(Box::new(|info| util::log(format!("panic: {info}"))));
             ptt::start();
             audio::start();
+            overlay::start();
+            updater::init();
+            #[cfg(windows)]
+            std::thread::spawn(register_scheme);
+            if let Some(url) = invite_from_args(std::env::args()) {
+                *PENDING_INVITE.lock() = Some(url);
+            }
             let menu = build_menu(app.handle())?;
             let mut tray = TrayIconBuilder::with_id("main").tooltip("EZ VoiceChat").menu(&menu).show_menu_on_left_click(false);
             if let Ok(i) = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png")) {
@@ -360,7 +447,7 @@ pub fn run() {
                 }
             })
             .build(app)?;
-            if !hidden {
+            if !hidden || PENDING_INVITE.lock().is_some() {
                 show_main();
             }
             Ok(())

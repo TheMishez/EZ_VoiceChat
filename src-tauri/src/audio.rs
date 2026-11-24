@@ -312,11 +312,18 @@ pub fn start() {
             }
         })
         .expect("audio thread");
-    // Talking indicators for the page.
+    // Talking indicators for the page, and connection quality every 2 s.
     std::thread::spawn(|| {
         let mut last = String::new();
+        let mut tick = 0u32;
         loop {
             std::thread::sleep(Duration::from_millis(80));
+            tick += 1;
+            if tick % 25 == 0 {
+                let q: serde_json::Map<String, Value> =
+                    source().map(|s| s.quality()).unwrap_or_default().into_iter().map(|(id, loss, jit)| (id.to_string(), json!([loss.round(), jit.round()]))).collect();
+                util::emit("vc-quality", Value::Object(q));
+            }
             let mut ids = source().map(|s| s.talking()).unwrap_or_default();
             ids.sort();
             let me = transmitting();

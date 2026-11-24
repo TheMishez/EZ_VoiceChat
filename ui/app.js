@@ -35,8 +35,119 @@ function applyVoicePrefs() {
   }
 }
 
-/* App options: rejoin the last server on startup. */
-let appOpts = { autoconnect: true, last: null };
+/* App options: rejoin the last server on startup, check for updates. */
+let appOpts = { autoconnect: true, last: null, checkUpdates: true };
+
+/* Connection quality per person: id -> [loss %, jitter ms]. */
+let quality = {};
+
+/* ---------------- invite links ---------------- */
+const INVITE_WEB = 'https://themishez.github.io/EZ_VoiceChat/join/';
+function parseInvite(text) {
+  const t = String(text || '').trim();
+  if (!/^(ezvc:\/\/|https?:\/\/)/i.test(t)) return null;
+  const i = t.search(/[?#]/);
+  if (i < 0) return null;
+  const q = new URLSearchParams(t.slice(i + 1).replace(/^[?#]/, ''));
+  const host = (q.get('h') || '').trim();
+  if (!host || !/^[A-Za-z0-9.\-:\[\]]{1,253}$/.test(host)) return null;
+  return {
+    kind: q.get('k') === 'ts3' ? 'ts3' : 'mumble',
+    host,
+    port: (q.get('p') || '').replace(/\D/g, '').slice(0, 5),
+    name: (q.get('n') || '').slice(0, 60),
+    password: (q.get('pw') || '').slice(0, 200)
+  };
+}
+function inviteLinks(b, withPassword) {
+  const q = new URLSearchParams({ k: b.kind, h: b.host });
+  if (b.port) q.set('p', b.port);
+  if (b.name) q.set('n', b.name);
+  if (withPassword && b.password) q.set('pw', b.password);
+  return { web: `${INVITE_WEB}#${q}`, app: `ezvc://join/?${q}` };
+}
+const sameServer = (a, b) => a.kind === b.kind && a.host.toLowerCase() === b.host.toLowerCase() && String(a.port || '') === String(b.port || '');
+
+/* Someone sent you an invite: always ask before joining (a server sees your IP address). */
+function showInvite(url) {
+  const inv = parseInvite(url);
+  if (!inv) { toast('That invite link is not valid', 'err'); return; }
+  const existing = bookmarks.find((b) => sameServer(b, inv));
+  const m = modal(`
+    <h3>Join ${esc(inv.name || inv.host)}?</h3>
+    <p class="small">${inv.kind === 'ts3' ? 'TeamSpeak 3' : 'Mumble'} server at <b>${esc(inv.host)}${inv.port ? ':' + esc(inv.port) : ''}</b>${inv.password ? ' (password included)' : ''}.</p>
+    <p class="small">Only join servers from people you trust: the server can see your IP address.</p>
+    ${existing ? '' : '<label class="switch"><input type="checkbox" id="i-save" checked><span></span>Save to my servers</label>'}
+    <div class="actions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="i-go">Join</button></div>`);
+  $('#i-go', m.el).onclick = () => {
+    let b = existing;
+    if (b && inv.password && !b.password) { b.password = inv.password; saveBookmarks(); }
+    if (!b) {
+      b = { id: uid(), name: inv.name, kind: inv.kind, host: inv.host, port: inv.port, nickname: '', password: inv.password };
+      if ($('#i-save', m.el)?.checked) { bookmarks.push(b); saveBookmarks(); renderBookmarks(); }
+    }
+    m.close();
+    connect(b);
+  };
+}
+
+async function openInviteDialog() {
+  if (!view || !lastConnect) return;
+  const b = { ...lastConnect, name: lastConnect.name || view.server_name || '' };
+  if (b.id === 'local') {
+    const st = (await invoke('srv_get')).status;
+    if (!st.running || !st.lan || !st.lanIp) {
+      toast('Your local server only allows this PC. Switch it to "My network" in Settings first.', 'err');
+      return;
+    }
+    b.host = st.lanIp;
+    b.port = String(st.port);
+    b.name = view.server_name;
+  }
+  const m = modal(`
+    <h3>Invite people to ${esc(b.name || b.host)}</h3>
+    <p class="small">Send this link. It opens EZ VoiceChat and asks them to join (they can download the app from the same page).</p>
+    <div class="invite-box"><input class="input" id="iv-link" readonly><button class="btn primary" id="iv-copy">Copy</button></div>
+    ${b.password ? '<label class="switch" style="margin-top:12px"><input type="checkbox" id="iv-pw"><span></span>Include the server password in the link</label><p class="small" id="iv-pw-note" hidden>Anyone who gets this link can join. Only share it with people you trust.</p>' : ''}
+    <p class="small" style="margin-top:12px">Already have the app? <a href="#" id="iv-app">Copy the direct app link</a> instead.</p>
+    ${b.id === 'local' ? '<p class="small">This is your local server: only people on your network can use this link.</p>' : ''}
+    <div class="actions"><button class="btn ghost" data-close>Done</button></div>`);
+  const pw = $('#iv-pw', m.el);
+  const links = () => inviteLinks(b, pw && pw.checked);
+  const show = () => { $('#iv-link', m.el).value = links().web; if (pw) $('#iv-pw-note', m.el).hidden = !pw.checked; };
+  show();
+  if (pw) pw.onchange = show;
+  const copy = async (text) => { try { await navigator.clipboard.writeText(text); toast('Invite link copied'); } catch (_) { $('#iv-link', m.el).select(); document.execCommand('copy'); toast('Invite link copied'); } };
+  $('#iv-copy', m.el).onclick = () => copy(links().web);
+  $('#iv-app', m.el).onclick = (e) => { e.preventDefault(); copy(links().app); };
+}
+
+/* ---------------- updates ---------------- */
+let upd = null;
+function renderUpdate() {
+  const b = $('#upd');
+  if (!upd) { b.hidden = true; return; }
+  if (upd.phase === 'downloading') {
+    b.hidden = false; b.disabled = true;
+    b.textContent = `Downloading update ${upd.percent || 0}%`;
+  } else if (upd.phase === 'ready') {
+    b.hidden = false; b.disabled = false;
+    b.textContent = `Restart to update to v${upd.version}`;
+    b.title = upd.notes || '';
+  } else {
+    b.hidden = true;
+  }
+  const line = $('#u-status');
+  if (line) {
+    line.textContent = {
+      checking: 'Checking…',
+      none: `You're on the latest version (v${upd.current}).`,
+      downloading: `Downloading v${upd.version}… ${upd.percent || 0}%`,
+      ready: `v${upd.version} is ready. Restart to install it.`,
+      error: upd.error || 'Update check failed.'
+    }[upd.phase] || `You're on v${upd.current}.`;
+  }
+}
 
 const I = {
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -46,6 +157,7 @@ const I = {
   headOff: '<path d="M3 3l18 18"/><path d="M4 15v-3a8 8 0 0 1 12.3-6.7M19.6 9.4A8 8 0 0 1 20 12v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   hash: '<path d="M5 9h14M5 15h14M10 3L8 21M16 3l-2 18"/>',
+  signal: '<path d="M4 20v-3M9 20v-7M14 20v-11M19 20V5"/>',
   spkOff: '<path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l4 6M21 9l-4 6"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'
 };
@@ -113,6 +225,7 @@ function editServer(bm) {
   const b = bm ? { ...bm } : { id: uid(), name: '', kind: 'mumble', host: '', port: '', nickname: '', password: '' };
   const m = modal(`
     <h3>${bm ? 'Edit server' : 'Add a server'}</h3>
+    ${bm ? '' : '<div class="field"><label>Got an invite link?</label><input class="input" id="f-invite" placeholder="Paste it here to fill everything in"></div>'}
     <div class="field"><label>Server type</label>
       <div class="seg" id="f-kind"><button data-k="mumble">Mumble</button><button data-k="ts3">TeamSpeak 3</button></div></div>
     <div class="field"><label>Name (optional)</label><input class="input" id="f-name" value="${esc(b.name)}" placeholder="My team"></div>
@@ -139,6 +252,17 @@ function editServer(bm) {
       : 'Works with any Mumble server, including your own EZ server.';
   };
   kindSeg.onclick = (e) => { const x = e.target.closest('[data-k]'); if (x) setKind(x.dataset.k); };
+  const fi = $('#f-invite', m.el);
+  if (fi) fi.oninput = () => {
+    const inv = parseInvite(fi.value);
+    if (!inv) return;
+    setKind(inv.kind);
+    $('#f-name', m.el).value = inv.name;
+    $('#f-host', m.el).value = inv.host;
+    $('#f-port', m.el).value = inv.port;
+    $('#f-pass', m.el).value = inv.password;
+    toast('Filled in from the invite');
+  };
   setKind(b.kind);
   const read = () => {
     b.name = $('#f-name', m.el).value.trim();
@@ -248,7 +372,7 @@ function renderTree() {
     return `
     <div class="user ${u.id === view.me ? 'me' : ''} ${lm ? 'lmuted' : ''} ${!lm && (talking.has(u.id) || (u.id === view.me && meTalking)) ? 'talking' : ''}" data-user="${u.id}">
       <span class="dot">${esc(initials(u.name))}</span><span class="name">${esc(u.name)}</span>
-      <span class="st">${u.self_mute || u.muted ? icon('micOff') : ''}${u.self_deaf || u.deafened ? icon('headOff') : ''}${lm ? `<span title="Muted for you">${icon('spkOff')}</span>` : ''}</span>
+      <span class="st">${u.self_mute || u.muted ? icon('micOff') : ''}${u.self_deaf || u.deafened ? icon('headOff') : ''}${lm ? `<span title="Muted for you">${icon('spkOff')}</span>` : ''}${qualityIcon(u)}</span>
     </div>`;
   };
   const chanHtml = (c, depth) => {
@@ -259,6 +383,15 @@ function renderTree() {
       ${us.length || children.length ? `<div class="kids">${us.map(userHtml).join('')}${children.map((k) => chanHtml(k, depth + 1)).join('')}</div>` : ''}`;
   };
   $('#tree').innerHTML = (kids.get('root') || []).map((c) => chanHtml(c, 0)).join('');
+}
+
+function qualityIcon(u) {
+  const q = quality[u.id];
+  if (!q || u.id === view.me) return '';
+  const [loss, jit] = q;
+  if (loss < 3 && jit < 60) return '';
+  const bad = loss >= 10 || jit >= 120;
+  return `<span class="q ${bad ? 'bad' : 'warn'}" title="${esc(u.name)}'s connection: ${loss}% packet loss, ${jit} ms jitter. Their voice may cut out.">${icon('signal')}</span>`;
 }
 
 function paintTalking() {
@@ -422,6 +555,10 @@ async function openSettings() {
     <div class="section">App</div>
     <label class="switch"><input type="checkbox" id="s-auto"><span></span>Start with Windows (in the tray)</label>
     <label class="switch"><input type="checkbox" id="s-rejoin"><span></span>Rejoin my last server when the app starts</label>
+    <label class="switch"><input type="checkbox" id="s-upd"><span></span>Update automatically</label>
+    <div class="row" style="margin:4px 0 0"><button class="btn" id="u-check">Check for updates</button><span class="small" id="u-status"></span></div>
+    <div class="section">In-game overlay</div>
+    <div id="ov"></div>
     <div class="section">Processing</div>
     <label class="switch"><input type="checkbox" id="s-ns" ${st.noise_suppression ? 'checked' : ''}><span></span>Noise suppression (RNNoise)</label>
     <div class="field"><label>Microphone volume <span class="small" id="s-gain-v"></span></label><input type="range" id="s-gain" min="0" max="3" step="0.05" value="${st.input_gain}"></div>
@@ -513,6 +650,11 @@ async function openSettings() {
   $('#s-auto', el).onchange = async (e) => {
     try { await invoke('app_set_autostart', { on: e.target.checked }); } catch (err) { toast(String(err), 'err'); e.target.checked = !e.target.checked; }
   };
+  $('#s-upd', el).checked = appOpts.checkUpdates !== false;
+  $('#s-upd', el).onchange = (e) => { appOpts.checkUpdates = e.target.checked; invoke('vc_store_set', { name: 'app', data: appOpts }); };
+  $('#u-check', el).onclick = async () => { upd = await invoke('upd_check'); renderUpdate(); };
+  renderUpdate();
+  overlaySection($('#ov', el));
   $('#s-rejoin', el).checked = appOpts.autoconnect;
   $('#s-rejoin', el).onchange = (e) => { appOpts.autoconnect = e.target.checked; invoke('vc_store_set', { name: 'app', data: appOpts }); };
   serverSection($('#srv', el));
@@ -523,6 +665,36 @@ async function openSettings() {
     $('#s-meter i', el).style.width = p + '%';
     $('#s-meter', el).classList.toggle('open', l.gate);
   }, 60);
+}
+
+/* ---------------- overlay settings ---------------- */
+async function overlaySection(host) {
+  const o = await invoke('ov_get');
+  const save = () => invoke('ov_set', { settings: o });
+  host.innerHTML = `
+    <label class="switch"><input type="checkbox" id="o-on" ${o.enabled ? 'checked' : ''}><span></span>Show who's talking on top of my game</label>
+    <p class="small" style="margin:2px 0 12px">Your game needs to run in <b>borderless / fullscreen windowed</b> mode for overlays to show.</p>
+    <div class="field"><label>Position</label><div class="seg corner-seg" id="o-corner"><button data-c="tl">Top left</button><button data-c="tr">Top right</button><button data-c="bl">Bottom left</button><button data-c="br">Bottom right</button></div></div>
+    <div class="field"><label>Show</label><div class="seg" id="o-show"><button data-v="talking">Only people talking</button><button data-v="channel">Everyone in my channel</button></div></div>
+    <label class="switch"><input type="checkbox" id="o-fs" ${o.only_fullscreen ? 'checked' : ''}><span></span>Only over fullscreen games (not on the desktop)</label>
+    <label class="switch"><input type="checkbox" id="o-cap" ${o.hide_from_capture ? 'checked' : ''}><span></span>Hide it from OBS / screen sharing</label>
+    <div class="field" style="margin-top:8px"><label>Size <span class="small" id="o-scale-v"></span></label><input type="range" id="o-scale" min="0.6" max="2" step="0.05" value="${o.scale}"></div>
+    <div class="field"><label>Opacity <span class="small" id="o-op-v"></span></label><input type="range" id="o-op" min="0.2" max="1" step="0.05" value="${o.opacity}"></div>`;
+  const seg = (id, key, attr) => {
+    const paint = () => $$(`#${id} button`, host).forEach((b) => b.classList.toggle('on', b.dataset[attr] === o[key]));
+    paint();
+    $('#' + id, host).onclick = (e) => { const b = e.target.closest('button'); if (!b) return; o[key] = b.dataset[attr]; paint(); save(); };
+  };
+  seg('o-corner', 'corner', 'c');
+  seg('o-show', 'show', 'v');
+  const pct = (v) => Math.round(v * 100) + '%';
+  $('#o-scale-v', host).textContent = pct(o.scale);
+  $('#o-op-v', host).textContent = pct(o.opacity);
+  $('#o-on', host).onchange = (e) => { o.enabled = e.target.checked; save(); };
+  $('#o-fs', host).onchange = (e) => { o.only_fullscreen = e.target.checked; save(); };
+  $('#o-cap', host).onchange = (e) => { o.hide_from_capture = e.target.checked; save(); };
+  $('#o-scale', host).oninput = (e) => { o.scale = Number(e.target.value); $('#o-scale-v', host).textContent = pct(o.scale); save(); };
+  $('#o-op', host).oninput = (e) => { o.opacity = Number(e.target.value); $('#o-op-v', host).textContent = pct(o.opacity); save(); };
 }
 
 /* ---------------- local test server ---------------- */
@@ -625,6 +797,8 @@ function bind() {
   $('#add-server').innerHTML = icon('plus');
   $('#btn-settings').innerHTML = icon('gear');
   $('#add-server').onclick = () => editServer(null);
+  $('#btn-invite').onclick = openInviteDialog;
+  $('#upd').onclick = () => invoke('upd_install');
   $('#me-info').onclick = (e) => { if (e.target.id !== 'me-edit') editName(); };
   $('#btn-settings').onclick = openSettings;
   $('#btn-mute').onclick = () => invoke('vc_set_self', { mute: !me.mute, deaf: me.deaf && me.mute });
@@ -721,8 +895,11 @@ async function boot() {
   renderView();
   listen('vc-state', (v) => { view = v; applyVoicePrefs(); renderView(); });
   applyVoicePrefs();
+  // Opened from an invite link? Ask about that instead of rejoining the last server.
+  const pending = await invoke('vc_take_invite');
+  if (pending) showInvite(pending);
   // Rejoin the last server you were on (unless you disconnected on purpose).
-  if (!view && appOpts.autoconnect && appOpts.last) {
+  else if (!view && appOpts.autoconnect && appOpts.last) {
     const b = bookmarks.find((x) => x.id === appOpts.last);
     if (b) connect(b);
   }
@@ -732,6 +909,15 @@ async function boot() {
     if (st.phase === 'disconnected' || st.phase === 'error') { if (!view) { activeBm = null; renderBookmarks(); } }
   });
   listen('vc-chat', addChat);
+  listen('vc-invite', () => invoke('vc_take_invite').then((u) => u && showInvite(u)));
+  listen('vc-quality', (q) => {
+    const prev = JSON.stringify(quality);
+    quality = q;
+    if (view && JSON.stringify(q) !== prev) renderTree();
+  });
+  listen('update-state', (u) => { upd = u; renderUpdate(); });
+  upd = await invoke('upd_state');
+  renderUpdate();
   listen('srv-users', () => serverRefresh && serverRefresh());
   listen('vc-self', (x) => { me = x; renderSelf(); });
   listen('vc-talking', (t) => { talking = new Set(t.ids); meTalking = t.me; paintTalking(); });

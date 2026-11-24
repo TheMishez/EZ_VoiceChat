@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Join on EZ VoiceChat</title>
+  <meta name="description" content="You've been invited to a voice server on EZ VoiceChat." />
+  <meta property="og:title" content="Join me on EZ VoiceChat" />
+  <meta property="og:description" content="Low-latency voice chat for gamers. Click to join." />
+  <meta name="theme-color" content="#ffd21f" />
+  <link rel="icon" href="logo.svg" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(900px 500px at 80% -10%, rgba(255, 210, 31, .08), transparent 60%), #08090b; color: #eceef2; font: 15px/1.5 "Segoe UI", system-ui, sans-serif; padding: 24px; }
+    .card { width: min(460px, 100%); background: #0f1013; border: 1px solid #22252b; border-radius: 20px; padding: 32px; text-align: center; }
+    img { width: 110px; height: 110px; }
+    h1 { font-size: 22px; margin: 8px 0 4px; }
+    .server { color: #8d919b; margin: 0 0 24px; word-break: break-all; }
+    .server b { color: #eceef2; }
+    a.btn { display: block; padding: 13px 18px; border-radius: 12px; font-weight: 700; text-decoration: none; margin-top: 10px; }
+    .primary { background: #ffd21f; color: #0b0b0b; }
+    .ghost { border: 1px solid #22252b; color: #eceef2; }
+    .ghost:hover { border-color: #3a3e46; }
+    .small { color: #8d919b; font-size: 13px; margin-top: 18px; }
+    .err { color: #ff4f62; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <img src="logo.svg" alt="EZ VoiceChat" />
+    <h1 id="title">You're invited to voice chat</h1>
+    <p class="server" id="server"></p>
+    <a class="btn primary" id="open" href="#">Open in EZ VoiceChat</a>
+    <a class="btn ghost" href="https://github.com/TheMishez/EZ_VoiceChat/releases/latest">Don't have it? Download EZ VoiceChat</a>
+    <p class="small">The app always asks before joining. Free and open source, for Windows.</p>
+  </div>
+  <script>
+    // Invite details live in the #fragment, so they're never sent to any web server.
+    const q = new URLSearchParams(location.hash.slice(1));
+    const host = q.get('h');
+    const text = (s) => document.createTextNode(s);
+    if (!host) {
+      document.getElementById('title').textContent = 'This invite link is incomplete';
+      document.getElementById('title').className = 'err';
+      document.getElementById('open').style.display = 'none';
+    } else {
+      const name = q.get('n');
+      const kind = q.get('k') === 'ts3' ? 'TeamSpeak 3' : 'Mumble';
+      if (name) document.getElementById('title').textContent = 'Join ' + name;
+      const s = document.getElementById('server');
+      const b = document.createElement('b');
+      b.textContent = host + (q.get('p') ? ':' + q.get('p') : '');
+      s.append(text(kind + ' server · '), b);
+      const link = 'ezvc://join/?' + q.toString();
+      document.getElementById('open').href = link;
+      // Try to open the app right away; the button stays as a fallback.
+      setTimeout(() => { location.href = link; }, 300);
+    }
+  </script>
+</body>
+</html>

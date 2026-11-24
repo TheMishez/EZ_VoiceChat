@@ -22,6 +22,15 @@ Low-latency voice chat for Windows by EZGGco. One app that joins both **Mumble**
 
 Want your own server? See [`server/`](server/) for the **EZ server**: a tuned Mumble server with a one-command Linode setup.
 
+## Releasing an update
+Installed copies update themselves from GitHub Releases:
+1. Bump `version` in `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` (e.g. 0.2.0).
+2. Push, then publish a release tagged `v0.2.0`. CI builds the installer and attaches it.
+3. Within a few hours (or on "Check for updates") the app downloads it and shows "Restart to update".
+
+## Invite links
+The **Invite** button makes a link like `https://themishez.github.io/EZ_VoiceChat/join/#k=mumble&h=…`. The page (in `docs/join/`, served by GitHub Pages) opens the app through the `ezvc://` link type it registers, and offers the download if it isn't installed. The app always asks before joining.
+
 ## Build
 Installers are built by GitHub Actions on every push (see the **Actions** tab → latest run → *Artifacts*).
 
