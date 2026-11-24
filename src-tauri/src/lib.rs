@@ -251,7 +251,7 @@ pub fn run() {
             ptt::start();
             audio::start();
             let menu = build_menu(app.handle())?;
-            let mut tray = TrayIconBuilder::with_id("main").tooltip("EZ VoiceChat").menu(&menu).menu_on_left_click(false);
+            let mut tray = TrayIconBuilder::with_id("main").tooltip("EZ VoiceChat").menu(&menu).show_menu_on_left_click(false);
             if let Ok(i) = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png")) {
                 tray = tray.icon(i);
             }

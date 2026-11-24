@@ -232,7 +232,7 @@ async fn run(cfg: &Config, cmds: &mut mpsc::UnboundedReceiver<Cmd>, gen: u64) {
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     loop {
         tokio::select! {
-            item = con.events().next() => {
+            item = async { let mut ev = con.events(); ev.next().await } => {
                 match item {
                     None => { session::status("disconnected", "Disconnected from the server"); break; }
                     Some(Err(e)) => { session::status("disconnected", format!("Disconnected: {e}")); break; }

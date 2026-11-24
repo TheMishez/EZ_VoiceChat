@@ -106,7 +106,7 @@ mod imp {
         let kb = capture || matches!(want, Some(Key::Vk(_)));
         let mouse = capture || matches!(want, Some(Key::Mouse(_)));
         let cur = REG.load(Ordering::Relaxed);
-        let mut set = |usage: u16, on: bool| {
+        let set = |usage: u16, on: bool| {
             let dev = RAWINPUTDEVICE {
                 usUsagePage: 0x01,
                 usUsage: usage,

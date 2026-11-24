@@ -39,6 +39,8 @@ jobs:
 
       - name: Compile check
         shell: bash
+        env:
+          CARGO_TERM_COLOR: never
         run: |
           set -o pipefail
           cd src-tauri
