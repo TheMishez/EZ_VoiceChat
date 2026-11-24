@@ -33,6 +33,14 @@ enum Stream {
     Low(crate::wasapi::Stream),
 }
 
+fn output_ms() -> f32 {
+    #[cfg(windows)]
+    if OUT_LL.load(Ordering::Relaxed) {
+        return f32::from_bits(crate::wasapi::OUT_QUEUED_MS.load(Ordering::Relaxed));
+    }
+    f32::from_bits(OUT_MS.load(Ordering::Relaxed))
+}
+
 /// Delay estimate, built from measured parts (device buffers, jitter buffer, ping) plus the fixed
 /// costs of the codec and noise suppression.
 pub fn latency() -> Value {
@@ -41,7 +49,7 @@ pub fn latency() -> Value {
     let (ping, kind) = crate::session::with_view(|v| (v.ping_ms, v.kind.clone())).unwrap_or((None, String::new()));
     json!({
         "input": f32::from_bits(IN_MS.load(Ordering::Relaxed)),
-        "output": f32::from_bits(OUT_MS.load(Ordering::Relaxed)),
+        "output": output_ms(),
         "inputLow": IN_LL.load(Ordering::Relaxed),
         "outputLow": OUT_LL.load(Ordering::Relaxed),
         "frame": frame,

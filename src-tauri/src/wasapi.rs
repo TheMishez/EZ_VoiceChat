@@ -4,7 +4,7 @@
 //! ask the Windows audio engine for its smallest period, usually about 3 ms on the standard
 //! driver, without taking the device away from other apps the way exclusive mode does.
 //! If the device or driver doesn't allow it, the caller falls back to cpal.
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -14,6 +14,9 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::*;
 use windows::Win32::System::Com::*;
 use windows::Win32::System::Threading::{AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, WaitForSingleObject};
+
+/// Audio currently queued for the speakers (ms, f32 bits); follows the adaptive target below.
+pub static OUT_QUEUED_MS: AtomicU32 = AtomicU32::new(0);
 
 pub type InputCb = Box<dyn FnMut(&[f32]) + Send>;
 pub type OutputCb = Box<dyn FnMut(&mut [f32]) + Send>;
@@ -202,16 +205,31 @@ unsafe fn run(name: &str, make: Make, stop: &AtomicBool, ready: &mpsc::SyncSende
             client.Start().map_err(err)?;
             let _ = ready.try_send(Ok((period_ms, latency_ms)));
             *started = true;
+            // Keep only as much audio queued as the engine needs: one period plus a small margin
+            // for this thread waking late (at least 2 ms), instead of filling the whole device
+            // buffer. If the queue ever runs dry (a glitch), add half a period of margin.
+            let ms_frames = |ms: f32| (ms * rate as f32 / 1000.0) as u32;
+            let mut target = (period + (period / 2).max(ms_frames(2.0))).min(buf_frames);
+            let mut primed = false;
+            let mut glitches = 0u32;
+            OUT_QUEUED_MS.store((target as f32 * 1000.0 / rate as f32).to_bits(), Ordering::Relaxed);
             (|| -> Result<(), String> {
                 while !stop.load(Ordering::Relaxed) {
                     if WaitForSingleObject(ev.0, 200) != WAIT_OBJECT_0 {
                         continue;
                     }
                     let pad = client.GetCurrentPadding().map_err(err)?;
-                    let avail = buf_frames.saturating_sub(pad);
+                    if pad == 0 && primed && target < buf_frames {
+                        glitches += 1;
+                        target = (target + period / 2).min(buf_frames);
+                        OUT_QUEUED_MS.store((target as f32 * 1000.0 / rate as f32).to_bits(), Ordering::Relaxed);
+                        crate::util::log(format!("speakers: buffer ran dry ({glitches}), now keeping {:.1} ms", target as f32 * 1000.0 / rate as f32));
+                    }
+                    let avail = target.saturating_sub(pad).min(buf_frames.saturating_sub(pad));
                     if avail == 0 {
                         continue;
                     }
+                    primed = true;
                     let p = ren.GetBuffer(avail).map_err(err)?;
                     let out = std::slice::from_raw_parts_mut(p as *mut f32, avail as usize * ch);
                     out.fill(0.0);

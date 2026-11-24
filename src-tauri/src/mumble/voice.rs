@@ -141,7 +141,7 @@ pub struct Sink {
 
 impl Sink {
     pub fn new(tx: mpsc::Sender<Vec<u8>>, bitrate: u32) -> Option<Self> {
-        let mut enc = audiopus::coder::Encoder::new(audiopus::SampleRate::Hz48000, audiopus::Channels::Mono, audiopus::Application::Voip).ok()?;
+        let mut enc = audiopus::coder::Encoder::new(audiopus::SampleRate::Hz48000, audiopus::Channels::Mono, audiopus::Application::LowDelay).ok()?;
         let _ = enc.set_bitrate(audiopus::Bitrate::BitsPerSecond(bitrate.clamp(8000, 192000) as i32));
         Some(Sink { enc, seq: 0, out: vec![0u8; 1275], tx, talking: false })
     }
@@ -208,7 +208,7 @@ pub struct Mixer {
 }
 
 const MAX_SAMPLES: usize = FRAME * 30;
-const START_PEAK_MS: f32 = 10.0;
+const START_PEAK_MS: f32 = 5.0;
 const MAX_PEAK_MS: f32 = 250.0;
 
 impl Mixer {

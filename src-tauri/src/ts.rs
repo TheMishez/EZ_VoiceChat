@@ -222,7 +222,7 @@ async fn run(cfg: &Config, cmds: &mut mpsc::UnboundedReceiver<Cmd>, gen: u64) {
     crate::audio::set_source(Some(source.clone()));
     let (vtx, mut vrx) = mpsc::channel::<OutPacket>(64);
     let bitrate = crate::audio::settings().bitrate;
-    if let Ok(mut enc) = audiopus::coder::Encoder::new(audiopus::SampleRate::Hz48000, audiopus::Channels::Mono, audiopus::Application::Voip) {
+    if let Ok(mut enc) = audiopus::coder::Encoder::new(audiopus::SampleRate::Hz48000, audiopus::Channels::Mono, audiopus::Application::LowDelay) {
         let _ = enc.set_bitrate(audiopus::Bitrate::BitsPerSecond(bitrate.clamp(8000, 192000) as i32));
         crate::audio::set_sink(Some(Box::new(TsSink { enc, out: vec![0u8; 1275], tx: vtx.clone(), vid: 0 })));
     }
