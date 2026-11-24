@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="L"><polygon points="0,0 556,0 407,600 0,600"/></clipPath>
+    <clipPath id="R"><polygon points="580,0 1024,0 1024,600 431,600"/></clipPath>
+  </defs>
+  <rect x="24" y="24" width="976" height="976" rx="210" fill="#0b0c0f"/>
+  <!-- headband: grey half / yellow half, split on the same slant as the E/Z gap -->
+  <path id="band" d="M138 500 C138 140 886 140 886 500" fill="none" stroke="#AFAEAE" stroke-width="54" clip-path="url(#L)"/>
+  <path d="M138 500 C138 140 886 140 886 500" fill="none" stroke="#FECC13" stroke-width="54" clip-path="url(#R)"/>
+  <!-- ear cups, slanted like the letters -->
+  <g transform="translate(138 610) skewX(-15)">
+    <rect x="-58" y="-140" width="116" height="280" rx="40" fill="#AFAEAE"/>
+    <rect x="22" y="-104" width="22" height="208" rx="11" fill="#7d7c7c"/>
+  </g>
+  <g transform="translate(886 610) skewX(-15)">
+    <rect x="-58" y="-140" width="116" height="280" rx="40" fill="#FECC13"/>
+    <rect x="-44" y="-104" width="22" height="208" rx="11" fill="#c99f00"/>
+  </g>
+  <!-- the EZ mark -->
+  <g transform="translate(198.2 424.4) scale(0.33)">
+    <path fill="#AFAEAE" d="M207 192H1000L813 355H413L392 433H984L785 593H348L323 682H860L619 872H17Z"/>
+    <path fill="#FECC13" d="M1055 192H1885L1290 682H1763L1538 872H681L1352 355H869Z"/>
+  </g>
+  <!-- mic boom from the left cup -->
+  <path d="M104 735 C126 830 230 850 330 842" fill="none" stroke="#AFAEAE" stroke-width="24" stroke-linecap="round"/>
+  <g transform="translate(362 842) skewX(-15)"><rect x="-38" y="-24" width="76" height="48" rx="24" fill="#FECC13"/></g>
+</svg>
