@@ -224,6 +224,18 @@ function renderUpdate() {
   } else {
     b.hidden = true;
   }
+  const go = $('#u-go');
+  if (go) go.hidden = upd.phase !== 'ready';
+  const help = $('#u-help');
+  if (help) {
+    const show = upd.phase === 'ready' || (upd.phase === 'error' && upd.hasFile);
+    help.hidden = !show;
+    if (show) {
+      help.innerHTML = 'Stuck? <a href="#" id="u-manual">Run the installer yourself</a> (it opens with its normal window), or <a href="#" id="u-page">download it from GitHub</a>.';
+      $('#u-manual', help).onclick = async (e) => { e.preventDefault(); if (!(await invoke('upd_run_installer'))) toast('Couldn\'t open the installer. Use the GitHub link instead.', 'err'); };
+      $('#u-page', help).onclick = (e) => { e.preventDefault(); invoke('app_open_external', { url: upd.page }); };
+    }
+  }
   const line = $('#u-status');
   if (line) {
     line.textContent = {
@@ -647,7 +659,8 @@ async function openSettings() {
     <label class="switch"><input type="checkbox" id="s-auto"><span></span>Start with Windows (in the tray)</label>
     <label class="switch"><input type="checkbox" id="s-rejoin"><span></span>Rejoin my last server when the app starts</label>
     <label class="switch"><input type="checkbox" id="s-upd"><span></span>Update automatically</label>
-    <div class="row" style="margin:4px 0 0"><button class="btn" id="u-check">Check for updates</button><span class="small" id="u-status"></span></div>
+    <div class="row" style="margin:4px 0 0"><button class="btn" id="u-check">Check for updates</button><button class="btn primary" id="u-go" hidden>Restart and update</button><span class="small" id="u-status"></span></div>
+    <div id="u-help" class="small" hidden style="margin-top:8px"></div>
     <div class="section">In-game overlay</div>
     <div id="ov"></div>
     <div class="section">Processing</div>
@@ -754,6 +767,7 @@ async function openSettings() {
   $('#s-upd', el).checked = appOpts.checkUpdates !== false;
   $('#s-upd', el).onchange = (e) => { appOpts.checkUpdates = e.target.checked; invoke('vc_store_set', { name: 'app', data: appOpts }); };
   $('#u-check', el).onclick = async () => { upd = await invoke('upd_check'); renderUpdate(); };
+  $('#u-go', el).onclick = () => $('#upd').click();
   renderUpdate();
   overlaySection($('#ov', el));
   $('#s-rejoin', el).checked = appOpts.autoconnect;
@@ -1028,9 +1042,11 @@ async function boot() {
   upd = await invoke('upd_state');
   renderUpdate();
   if (upd.phase === 'error' && upd.version) {
+    const log = await invoke('upd_log');
     const m = modal(`<h3>The update didn't install</h3><p class="small">${esc(upd.error)}</p>
-      <div class="actions"><button class="btn ghost" data-close>Later</button><button class="btn primary" id="u-page">Open the download page</button></div>`);
-    $('#u-page', m.el).onclick = () => { invoke('app_open_external', { url: upd.page }); m.close(); };
+      ${log.length ? `<p class="small">What happened (send this to support if it keeps failing):</p><pre class="log">${esc(log.join('\n'))}</pre>` : ''}
+      <div class="actions"><button class="btn ghost" data-close>Later</button><button class="btn primary" id="u-page2">Open the download page</button></div>`, { wide: true });
+    $('#u-page2', m.el).onclick = () => { invoke('app_open_external', { url: upd.page }); m.close(); };
   }
   listen('srv-users', () => serverRefresh && serverRefresh());
   listen('vc-self', (x) => { me = x; renderSelf(); });

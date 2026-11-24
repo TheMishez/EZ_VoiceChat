@@ -195,3 +195,5 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .pic-row { display: flex; gap: 20px; align-items: center; }
 .pic-row .btn { margin: 0 6px 8px 0; }
 .pic-preview { width: 112px; height: 112px; border-radius: 50%; background: #2a2d34; display: grid; place-items: center; font-size: 34px; font-weight: 800; flex: none; overflow: hidden; border: 2px solid var(--line); }
+pre.log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 180px; overflow: auto; user-select: text; }
+#u-help a { color: var(--accent); }

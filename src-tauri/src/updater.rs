@@ -57,6 +57,7 @@ pub fn state() -> Value {
             "error": s.error,
             "enabled": enabled(),
             "page": page(),
+            "hasFile": s.file.as_ref().is_some_and(|f| f.exists()),
         })
     })
 }
@@ -235,6 +236,45 @@ fn download(url: String) {
         }
         changed();
     });
+}
+
+/// Backup plan: opens the downloaded installer with its normal window (you click through it),
+/// then closes the app so the installer can replace it.
+pub fn run_installer() -> bool {
+    let Some(file) = with(|s| s.file.clone()) else { return false };
+    if !file.exists() {
+        return false;
+    }
+    util::log(format!("[update] running the installer normally: {}", file.display()));
+    let mut cmd = std::process::Command::new(&file);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0000_0200 | 0x0100_0000); // new process group, outside the app's job
+    }
+    let started = cmd.spawn().or_else(|_| std::process::Command::new(&file).spawn());
+    match started {
+        Ok(_) => {
+            std::thread::spawn(|| {
+                std::thread::sleep(Duration::from_millis(600));
+                crate::quit();
+            });
+            true
+        }
+        Err(e) => {
+            util::log(format!("[update] couldn't open the installer: {e}"));
+            false
+        }
+    }
+}
+
+/// The last few update-related lines from the log, shown when an update fails.
+pub fn log_tail() -> Vec<String> {
+    let text = std::fs::read_to_string(util::data_dir().join("voicechat.log")).unwrap_or_default();
+    let mut lines: Vec<String> = text.lines().filter(|l| l.contains("update")).map(String::from).collect();
+    let n = lines.len();
+    lines.drain(..n.saturating_sub(8));
+    lines
 }
 
 fn pending_path() -> std::path::PathBuf {

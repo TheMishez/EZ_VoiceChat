@@ -243,6 +243,16 @@ fn upd_install() -> bool {
     updater::install()
 }
 
+#[tauri::command]
+fn upd_run_installer() -> bool {
+    updater::run_installer()
+}
+
+#[tauri::command]
+fn upd_log() -> Vec<String> {
+    updater::log_tail()
+}
+
 /// An ezvc:// invite the app was started with (or received) that the page hasn't shown yet.
 static PENDING_INVITE: parking_lot::Mutex<Option<String>> = parking_lot::const_mutex(None);
 
@@ -421,6 +431,8 @@ pub fn run() {
             upd_state,
             upd_check,
             upd_install,
+            upd_run_installer,
+            upd_log,
             vc_take_invite,
             app_set_autostart,
             srv_accept_terms,
