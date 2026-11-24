@@ -83,6 +83,7 @@ fn newer(a: &[u64], b: &[u64]) -> bool {
 }
 
 pub fn init() {
+    check_last_attempt();
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_secs(10));
         loop {
@@ -211,27 +212,83 @@ fn download(url: String) {
     });
 }
 
-/// Runs the downloaded installer silently, then starts the app again.
-pub fn install() -> bool {
-    let Some(file) = with(|s| if s.phase == "ready" { s.file.clone() } else { None }) else { return false };
-    let exe = std::env::current_exe().unwrap_or_default();
-    let q = |p: &std::path::Path| format!("'{}'", p.to_string_lossy().replace('\'', "''"));
-    let ps = format!(
-        "Start-Sleep -Milliseconds 900; Start-Process -FilePath {} -ArgumentList '/S' -Wait; Start-Process -FilePath {}",
-        q(&file),
-        q(&exe)
-    );
-    let mut cmd = std::process::Command::new("powershell.exe");
-    cmd.args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &ps]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // no console window
+fn pending_path() -> std::path::PathBuf {
+    util::data_dir().join("update-pending.json")
+}
+
+/// After an update attempt: did it take? If the app is still on an older version, say so
+/// instead of quietly offering the same update again.
+fn check_last_attempt() {
+    let Some(v) = util::read_json(&pending_path()) else { return };
+    let _ = std::fs::remove_file(pending_path());
+    let want = v["version"].as_str().unwrap_or("").to_string();
+    match (parts(&want), parts(current())) {
+        (Some(w), Some(m)) if newer(&w, &m) => {
+            util::log(format!("update to {want} did not install (still {})", current()));
+            with(|s| {
+                s.phase = "error".into();
+                s.version = want.clone();
+                s.error = format!("The update to v{want} didn't finish installing. Download it from the releases page and run it.");
+            });
+        }
+        _ => util::log(format!("updated to {}", current())),
     }
-    if cmd.spawn().is_ok() {
-        crate::quit();
-        true
-    } else {
-        false
+}
+
+/// Runs the downloaded installer (a small progress window, no questions), then starts the app
+/// again. A helper does this after the app has fully closed; it's started outside the app's
+/// process group so closing the app can't take it down with it.
+pub fn install() -> bool {
+    let Some((file, version)) = with(|s| if s.phase == "ready" { s.file.clone().map(|f| (f, s.version.clone())) } else { None }) else { return false };
+    let exe = std::env::current_exe().unwrap_or_default();
+    let name = exe.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let log = util::data_dir().join("voicechat.log");
+    util::write_json(&pending_path(), &json!({ "version": version }));
+    util::log(format!("installing update {version} from {}", file.display()));
+    let q = |p: &str| format!("'{}'", p.replace('\'', "''"));
+    let ps = format!(
+        "$ErrorActionPreference = 'Continue'; \
+         $p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; if ($p) {{ [void]$p.WaitForExit(20000) }}; \
+         try {{ $i = Start-Process -FilePath {file} -ArgumentList '/P','/R' -Wait -PassThru; $code = $i.ExitCode }} catch {{ $code = $_.Exception.Message }}; \
+         Add-Content -Path {log} -Value ('[update] installer finished: ' + $code); \
+         Start-Sleep -Milliseconds 800; \
+         if (-not (Get-Process -Name {name} -ErrorAction SilentlyContinue)) {{ Start-Process -FilePath {exe} }}",
+        pid = std::process::id(),
+        file = q(&file.to_string_lossy()),
+        log = q(&log.to_string_lossy()),
+        name = q(&name),
+        exe = q(&exe.to_string_lossy()),
+    );
+    let spawn = |flags: u32| {
+        let mut cmd = std::process::Command::new("powershell.exe");
+        cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", &ps]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(flags);
+        }
+        #[cfg(not(windows))]
+        let _ = flags;
+        cmd.spawn()
+    };
+    const NO_WINDOW: u32 = 0x0800_0000;
+    const NEW_GROUP: u32 = 0x0000_0200;
+    const BREAKAWAY: u32 = 0x0100_0000;
+    let started = spawn(NO_WINDOW | NEW_GROUP | BREAKAWAY).or_else(|_| spawn(NO_WINDOW | NEW_GROUP));
+    match started {
+        Ok(_) => {
+            crate::quit();
+            true
+        }
+        Err(e) => {
+            util::log(format!("could not start the update: {e}"));
+            let _ = std::fs::remove_file(pending_path());
+            with(|s| {
+                s.phase = "error".into();
+                s.error = "Couldn't start the installer. Download the update from the releases page.".into();
+            });
+            changed();
+            false
+        }
     }
 }

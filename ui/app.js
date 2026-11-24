@@ -899,7 +899,12 @@ function bind() {
   $('#btn-settings').innerHTML = icon('gear');
   $('#add-server').onclick = () => editServer(null);
   $('#btn-invite').onclick = openInviteDialog;
-  $('#upd').onclick = () => invoke('upd_install');
+  $('#upd').onclick = async () => {
+    const b = $('#upd');
+    b.disabled = true;
+    b.textContent = 'Installing update…';
+    if (!(await invoke('upd_install'))) { upd = await invoke('upd_state'); renderUpdate(); }
+  };
   $('#me-avatar').onclick = openAvatarDialog;
   $('#me-avatar').title = 'Change your profile picture';
   $('#me-info').onclick = (e) => { if (e.target.id !== 'me-edit') editName(); };
@@ -1022,6 +1027,11 @@ async function boot() {
   listen('update-state', (u) => { upd = u; renderUpdate(); });
   upd = await invoke('upd_state');
   renderUpdate();
+  if (upd.phase === 'error' && upd.version) {
+    const m = modal(`<h3>The update didn't install</h3><p class="small">${esc(upd.error)}</p>
+      <div class="actions"><button class="btn ghost" data-close>Later</button><button class="btn primary" id="u-page">Open the download page</button></div>`);
+    $('#u-page', m.el).onclick = () => { invoke('app_open_external', { url: upd.page }); m.close(); };
+  }
   listen('srv-users', () => serverRefresh && serverRefresh());
   listen('vc-self', (x) => { me = x; renderSelf(); });
   listen('vc-talking', (t) => { talking = new Set(t.ids); meTalking = t.me; paintTalking(); });
