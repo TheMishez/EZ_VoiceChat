@@ -13,7 +13,12 @@ use std::collections::HashMap;
 /// Largest picture we send or accept (bytes).
 pub const MAX_BYTES: usize = 48 * 1024;
 
-static CACHE: Mutex<Option<HashMap<String, String>>> = parking_lot::const_mutex(None);
+/// hash -> (MIME type, image bytes)
+static CACHE: Mutex<Option<HashMap<String, (&'static str, Vec<u8>)>>> = parking_lot::const_mutex(None);
+
+fn data_url(m: &str, b: &[u8]) -> String {
+    format!("data:{m};base64,{}", base64::engine::general_purpose::STANDARD.encode(b))
+}
 
 fn path() -> std::path::PathBuf {
     util::data_dir().join("avatar.jpg")
@@ -50,7 +55,7 @@ pub fn remember(b: &[u8]) -> String {
     if map.len() > 500 {
         map.clear();
     }
-    map.entry(h.clone()).or_insert_with(|| format!("data:{m};base64,{}", base64::engine::general_purpose::STANDARD.encode(b)));
+    map.entry(h.clone()).or_insert_with(|| (m, b.to_vec()));
     h
 }
 
@@ -64,8 +69,8 @@ pub fn get(hashes: &[String]) -> Value {
     let mut out = serde_json::Map::new();
     if let Some(map) = c.as_ref() {
         for h in hashes.iter().take(200) {
-            if let Some(u) = map.get(h) {
-                out.insert(h.clone(), json!(u));
+            if let Some((m, b)) = map.get(h) {
+                out.insert(h.clone(), json!(data_url(m, b)));
             }
         }
     }
@@ -79,8 +84,14 @@ pub fn own() -> Option<Vec<u8>> {
 
 pub fn own_data_url() -> Option<String> {
     let b = own()?;
-    let h = remember(&b);
-    CACHE.lock().as_ref().and_then(|m| m.get(&h).cloned())
+    let m = mime(&b)?;
+    remember(&b);
+    Some(data_url(m, &b))
+}
+
+/// A picture's raw bytes (for the overlay, which decodes it natively).
+pub fn bytes(hash: &str) -> Option<Vec<u8>> {
+    CACHE.lock().as_ref().and_then(|m| m.get(hash).map(|x| x.1.clone()))
 }
 
 /// Sets (a data: URL from the page) or removes (None) your picture, and updates the server

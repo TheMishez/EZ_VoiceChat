@@ -125,6 +125,52 @@ pub fn load_settings() -> Settings {
 // ------------------------------------------------------------------ shared state
 
 static SETTINGS: Mutex<Option<Settings>> = parking_lot::const_mutex(None);
+
+/// The few settings the audio callbacks read, as a plain copyable value: the callbacks read this
+/// every 10 ms, so they must never clone the full settings (strings, lists) or allocate.
+#[derive(Clone, Copy)]
+struct Live {
+    gain: f32,
+    noise_suppression: bool,
+    mode: Mode,
+    vad_threshold_db: f32,
+    ptt_release_ms: u32,
+    frame_ms: u32,
+    output_volume: f32,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Vad,
+    Ptt,
+    Continuous,
+}
+
+static LIVE: Mutex<Live> = parking_lot::const_mutex(Live {
+    gain: 1.0,
+    noise_suppression: true,
+    mode: Mode::Vad,
+    vad_threshold_db: -42.0,
+    ptt_release_ms: 150,
+    frame_ms: 10,
+    output_volume: 1.0,
+});
+
+fn update_live(s: &Settings) {
+    *LIVE.lock() = Live {
+        gain: s.input_gain.clamp(0.0, 4.0),
+        noise_suppression: s.noise_suppression,
+        mode: match s.mode.as_str() {
+            "ptt" => Mode::Ptt,
+            "continuous" => Mode::Continuous,
+            _ => Mode::Vad,
+        },
+        vad_threshold_db: s.vad_threshold_db,
+        ptt_release_ms: s.ptt_release_ms,
+        frame_ms: s.frame_ms.clamp(10, 20),
+        output_volume: s.output_volume.clamp(0.0, 2.0),
+    };
+}
 static SINK: Mutex<Option<Box<dyn VoiceSink>>> = parking_lot::const_mutex(None);
 static SOURCE: Mutex<Option<Arc<dyn VoiceSource>>> = parking_lot::const_mutex(None);
 static LOOPBACK: Mutex<Option<VecDeque<f32>>> = parking_lot::const_mutex(None);
@@ -198,6 +244,7 @@ pub fn settings() -> Settings {
 }
 
 pub fn set_settings(s: Settings) {
+    update_live(&s);
     let old = SETTINGS.lock().replace(s.clone());
     util::write_json(&settings_path(), &serde_json::to_value(&s).unwrap_or_default());
     crate::ptt::configure(s.mode == "ptt", &s.ptt_key, &s.mute_key, &s.deaf_key);
@@ -287,6 +334,7 @@ fn find(input: bool, name: &str) -> Option<cpal::Device> {
 pub fn start() {
     *SETTINGS.lock() = Some(load_settings());
     let s = settings();
+    update_live(&s);
     crate::ptt::configure(s.mode == "ptt", &s.ptt_key, &s.mute_key, &s.deaf_key);
     let (tx, rx) = mpsc::channel::<()>();
     let _ = CTL.set(Mutex::new(tx.clone()));
@@ -425,14 +473,16 @@ impl Capture {
             }
         }
         while self.pending.len() >= BLOCK {
-            let block: Vec<f32> = self.pending.drain(..BLOCK).collect();
+            let mut block = [0f32; BLOCK];
+            block.copy_from_slice(&self.pending[..BLOCK]);
+            self.pending.drain(..BLOCK);
             self.process(&block);
         }
     }
 
     fn process(&mut self, block: &[f32]) {
-        let st = SETTINGS.lock().clone().unwrap_or_default();
-        let gain = st.input_gain.clamp(0.0, 4.0);
+        let st = *LIVE.lock();
+        let gain = st.gain;
         let mut b = [0f32; BLOCK];
         for (o, i) in b.iter_mut().zip(block) {
             *o = i * gain;
@@ -457,9 +507,9 @@ impl Capture {
             }
         }
         // The gate: voice activation with a short hang time, push-to-talk with a release tail.
-        let open = match st.mode.as_str() {
-            "continuous" => true,
-            "ptt" => {
+        let open = match st.mode {
+            Mode::Continuous => true,
+            Mode::Ptt => {
                 let held = crate::ptt::held();
                 if held != self.ptt_was {
                     self.ptt_was = held;
@@ -477,7 +527,7 @@ impl Capture {
                     false
                 }
             }
-            _ => {
+            Mode::Vad => {
                 if db > st.vad_threshold_db {
                     self.hang = 30; // 300 ms
                     true
@@ -492,7 +542,7 @@ impl Capture {
         GATE_OPEN.store(open, Ordering::Relaxed);
         let tx = open && !SELF_MUTE.load(Ordering::Relaxed);
         TRANSMITTING.store(tx, Ordering::Relaxed);
-        let per = (st.frame_ms.clamp(10, 20) / 10) as usize * BLOCK;
+        let per = (st.frame_ms / 10) as usize * BLOCK;
         let mut sink = SINK.lock();
         if tx {
             self.frame.extend_from_slice(&b);
@@ -504,10 +554,10 @@ impl Capture {
             }
         } else if self.was_tx {
             // Finished talking: flush and tell the server it's the last packet.
+            // Pad in place (the buffer keeps its capacity, so nothing is allocated).
+            self.frame.resize(per, 0.0);
             if let Some(s) = sink.as_mut() {
-                let mut last = std::mem::take(&mut self.frame);
-                last.resize(per, 0.0);
-                s.frame(&last, true);
+                s.frame(&self.frame[..per], true);
             }
             self.frame.clear();
         }
@@ -614,7 +664,7 @@ impl Playback {
                 buf[f * 2 + 1] += v;
             }
         }
-        let vol = SETTINGS.lock().as_ref().map(|s| s.output_volume).unwrap_or(1.0).clamp(0.0, 2.0);
+        let vol = LIVE.lock().output_volume;
         for v in buf.iter_mut() {
             *v = (*v * vol).clamp(-1.0, 1.0);
         }

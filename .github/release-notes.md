@@ -1,7 +1,5 @@
-**Fixes the in-app updater.** In 0.1.0 and 0.1.1, "Restart to update" could restart the app without installing anything. If you're on one of those versions, download `EZ VoiceChat_0.1.2_x64-setup.exe` below and run it once; updates after this one install by themselves.
+**Lighter in-game overlay.** The "who's talking" overlay is now drawn as a plain Windows window instead of a hidden browser page, so it uses a small fraction of the memory and GPU while you play. It only redraws when something changes (someone starts or stops talking, mutes, joins).
 
-- Updates now show a small progress window while installing, then the app reopens.
-- If an update ever fails to install, the app says so and links to this page instead of offering the same update again.
-- Includes profile pictures from 0.1.1: click the round avatar in the bottom-left corner to pick one.
+Also: the audio thread no longer allocates memory while you talk, which keeps voice timing steady on busy PCs.
 
-If Windows shows a SmartScreen warning, click **More info → Run anyway**.
+If you're on 0.1.2, this should arrive through **Restart to update** on its own.
