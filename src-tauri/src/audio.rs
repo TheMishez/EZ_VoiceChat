@@ -86,6 +86,8 @@ pub struct Settings {
     /// Short sounds for joins, leaves, mute, push-to-talk and connecting.
     pub cues: bool,
     pub cue_volume: f32,
+    /// Cue groups turned off: "join" (joins/leaves), "mute" (mute/deafen), "ptt", "connect".
+    pub cues_off: Vec<String>,
 }
 
 impl Default for Settings {
@@ -107,6 +109,7 @@ impl Default for Settings {
             deaf_key: String::new(),
             cues: true,
             cue_volume: 0.6,
+            cues_off: Vec::new(),
         }
     }
 }
@@ -144,7 +147,13 @@ pub enum Cue {
 
 /// Plays a short cue: a few soft sine notes (frequency Hz, length ms).
 pub fn cue(c: Cue) {
-    let (on, vol) = SETTINGS.lock().as_ref().map(|s| (s.cues, s.cue_volume)).unwrap_or((true, 0.6));
+    let group = match c {
+        Cue::Join | Cue::Leave => "join",
+        Cue::Mute | Cue::Unmute | Cue::Deafen | Cue::Undeafen => "mute",
+        Cue::PttOn | Cue::PttOff => "ptt",
+        Cue::Connected | Cue::Disconnected => "connect",
+    };
+    let (on, vol) = SETTINGS.lock().as_ref().map(|s| (s.cues && !s.cues_off.iter().any(|g| g == group), s.cue_volume)).unwrap_or((true, 0.6));
     if !on || vol <= 0.0 {
         return;
     }

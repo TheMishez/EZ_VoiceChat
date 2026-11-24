@@ -550,7 +550,11 @@ async function openSettings() {
     <div class="hk"><span>Mute / unmute mic</span><button class="key-btn" id="s-mute-key"></button><button class="icon-btn" id="s-mute-clr" title="Remove">✕</button></div>
     <div class="hk"><span>Deafen / undeafen</span><button class="key-btn" id="s-deaf-key"></button><button class="icon-btn" id="s-deaf-clr" title="Remove">✕</button></div>
     <div class="section">Sounds</div>
-    <label class="switch"><input type="checkbox" id="s-cues" ${st.cues ? 'checked' : ''}><span></span>Play sounds for joins, leaves, mute and push-to-talk</label>
+    <label class="switch"><input type="checkbox" id="s-cues" ${st.cues ? 'checked' : ''}><span></span>Play sounds</label>
+    <div id="s-cue-groups" class="cue-groups">
+      ${[['join', 'Someone joins or leaves my channel'], ['mute', 'I mute, unmute, deafen or undeafen'], ['ptt', 'Push-to-talk on / off'], ['connect', 'Connected / disconnected']]
+        .map(([g, label]) => `<label class="switch"><input type="checkbox" data-g="${g}" ${(st.cues_off || []).includes(g) ? '' : 'checked'}><span></span>${label}</label>`).join('')}
+    </div>
     <div class="field"><label>Sound volume <span class="small" id="s-cuevol-v"></span></label><input type="range" id="s-cuevol" min="0" max="1.5" step="0.05" value="${st.cue_volume}"></div>
     <div class="section">App</div>
     <label class="switch"><input type="checkbox" id="s-auto"><span></span>Start with Windows (in the tray)</label>
@@ -643,7 +647,17 @@ async function openSettings() {
   bindKey('#s-key', 'ptt_key');
   bindKey('#s-mute-key', 'mute_key', '#s-mute-clr');
   bindKey('#s-deaf-key', 'deaf_key', '#s-deaf-clr');
-  $('#s-cues', el).onchange = (e) => { s.cues = e.target.checked; save(); };
+  const cueGroups = () => $('#s-cue-groups', el).classList.toggle('off', !s.cues);
+  cueGroups();
+  $('#s-cues', el).onchange = (e) => { s.cues = e.target.checked; cueGroups(); save(); };
+  $('#s-cue-groups', el).onchange = (e) => {
+    const g = e.target.dataset.g;
+    if (!g) return;
+    const off = new Set(s.cues_off || []);
+    if (e.target.checked) off.delete(g); else off.add(g);
+    s.cues_off = [...off];
+    save();
+  };
   $('#s-cuevol', el).oninput = (e) => { s.cue_volume = Number(e.target.value); $('#s-cuevol-v', el).textContent = pct(s.cue_volume); save(); };
   $('#s-cuevol-v', el).textContent = pct(s.cue_volume);
   invoke('app_get_autostart').then((on) => ($('#s-auto', el).checked = on));

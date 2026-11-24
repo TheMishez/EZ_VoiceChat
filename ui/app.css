@@ -186,3 +186,6 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .invite-box { display: flex; gap: 8px; }
 .invite-box input { flex: 1; font-size: 12px; }
 .corner-seg button { font-size: 12px; }
+.cue-groups { margin: 2px 0 10px 44px; }
+.cue-groups .switch { font-size: 13px; margin: 4px 0; }
+.cue-groups.off { opacity: .45; pointer-events: none; }
