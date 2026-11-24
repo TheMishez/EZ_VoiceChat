@@ -1,0 +1,57 @@
+[package]
+name = "ez-voicechat"
+version = "0.1.0"
+description = "EZ VoiceChat: low-latency voice chat for Mumble and TeamSpeak 3 servers"
+authors = ["EZGGco"]
+license = "MIT"
+edition = "2021"
+
+[lib]
+name = "ez_voicechat_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.12"
+futures = "0.3"
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+
+# Audio
+cpal = "0.18"
+audiopus = "0.3.0-rc.0"
+nnnoiseless = { version = "0.5", default-features = false }
+
+# Mumble: TLS control channel, protobuf messages, OCB2-AES128 voice crypto
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+ring = "0.17"
+rcgen = "0.13"
+prost = "0.13"
+aes = "0.8"
+
+# TeamSpeak 3 (ReSpeak/tsclientlib, pinned)
+tsclientlib = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5" }
+tsproto-packets = { git = "https://github.com/ReSpeak/tsclientlib", rev = "ee3bc6f45a7137db7793ba5593a321df400d53e5" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input",
+  "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

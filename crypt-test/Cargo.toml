@@ -1,0 +1,13 @@
+# Runs the Mumble voice-encryption tests on their own (fast, no app build needed):
+#   cargo test --manifest-path crypt-test/Cargo.toml
+[package]
+name = "crypt-test"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "../src-tauri/src/mumble/crypt.rs"
+
+[dependencies]
+aes = "0.8"

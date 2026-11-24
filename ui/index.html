@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>EZ VoiceChat</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <header id="bar" data-tauri-drag-region>
+    <div class="brand" data-tauri-drag-region>
+      <svg class="mark" viewBox="24 58 222 124"><g fill="currentColor" transform="translate(120 120) skewX(-11) translate(-120 -120)"><rect x="40" y="65" width="22" height="110"/><rect x="40" y="65" width="70" height="22"/><rect x="40" y="109" width="54" height="22"/><rect x="40" y="153" width="70" height="22"/><rect x="122" y="65" width="78" height="22"/><rect x="122" y="153" width="78" height="22"/><polyline points="192,87 170,104 181,113 151,131 162,140 132,153" fill="none" stroke="currentColor" stroke-width="15" stroke-linejoin="miter" stroke-miterlimit="10"/></g></svg>
+      <span data-tauri-drag-region>VOICECHAT</span>
+    </div>
+    <div id="status" class="pill idle"><i></i><span>Not connected</span></div>
+    <div class="flex" data-tauri-drag-region></div>
+    <div class="win">
+      <button data-win="min" title="Minimize"><svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg></button>
+      <button data-win="max" title="Maximize"><svg viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" rx="1"/></svg></button>
+      <button data-win="close" class="close" title="Close (stays connected in the tray)"><svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg></button>
+    </div>
+  </header>
+
+  <div id="shell">
+    <aside id="side">
+      <div class="side-head"><span>Servers</span><button id="add-server" class="icon-btn" title="Add a server"></button></div>
+      <div id="bookmarks"></div>
+      <div class="flex"></div>
+      <div id="me">
+        <div class="avatar" id="me-avatar">?</div>
+        <div class="me-info"><b id="me-name">Not connected</b><small id="me-sub">Pick a server</small></div>
+        <button id="btn-mute" class="icon-btn" title="Mute microphone"></button>
+        <button id="btn-deaf" class="icon-btn" title="Deafen"></button>
+        <button id="btn-settings" class="icon-btn" title="Audio settings"></button>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div id="server-head" hidden>
+        <div>
+          <h1 id="server-name"></h1>
+          <div class="meta" id="server-meta"></div>
+        </div>
+        <div class="flex"></div>
+        <button id="btn-disconnect" class="btn ghost">Disconnect</button>
+      </div>
+      <div id="tree" hidden></div>
+      <div id="welcome"></div>
+    </main>
+
+    <aside id="chat">
+      <div class="chat-head">Chat <small id="chat-where"></small></div>
+      <div id="messages"></div>
+      <form id="chat-form" autocomplete="off"><input id="chat-input" placeholder="Message your channel…" maxlength="2000" disabled /></form>
+    </aside>
+  </div>
+
+  <div id="menu" hidden></div>
+  <div id="modal-root"></div>
+  <div id="toasts"></div>
+  <script src="app.js"></script>
+</body>
+</html>

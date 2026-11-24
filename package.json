@@ -1,0 +1,16 @@
+{
+  "name": "ez-voicechat",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Low-latency voice chat for Mumble and TeamSpeak 3 servers (Tauri + Rust)",
+  "author": "EZGGco",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

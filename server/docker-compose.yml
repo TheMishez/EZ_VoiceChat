@@ -1,0 +1,32 @@
+# EZ server: a Mumble server tuned for low-latency team voice.
+# Start:  docker compose up -d     Logs: docker compose logs -f
+# Every MUMBLE_CONFIG_<KEY> below sets the matching mumble-server.ini option
+# (see mumble-server.ini in this folder for what each one does).
+services:
+  mumble:
+    image: mumblevoip/mumble-server:latest
+    container_name: ez-voice
+    restart: unless-stopped
+    ports:
+      - "64738:64738/tcp"
+      - "64738:64738/udp"
+    volumes:
+      - ./data:/data
+    environment:
+      MUMBLE_SUPERUSER_PASSWORD: "${EZ_ADMIN_PASSWORD:?set EZ_ADMIN_PASSWORD in .env}"
+      MUMBLE_CONFIG_SERVERPASSWORD: "${EZ_SERVER_PASSWORD:-}"
+      MUMBLE_CONFIG_REGISTERNAME: "${EZ_SERVER_NAME:-EZ Server}"
+      MUMBLE_CONFIG_WELCOMETEXT: "${EZ_WELCOME:-Welcome to the EZ server.}"
+      MUMBLE_CONFIG_BANDWIDTH: "144000"
+      MUMBLE_CONFIG_OPUSTHRESHOLD: "0"
+      MUMBLE_CONFIG_USERS: "100"
+      MUMBLE_CONFIG_TIMEOUT: "30"
+      MUMBLE_CONFIG_ALLOWRECORDING: "false"
+      MUMBLE_CONFIG_LOGDAYS: "7"
+      MUMBLE_CONFIG_TEXTMESSAGELENGTH: "5000"
+      MUMBLE_CONFIG_IMAGEMESSAGELENGTH: "0"
+      MUMBLE_CONFIG_CERTREQUIRED: "false"
+      MUMBLE_CONFIG_REMEMBERCHANNEL: "true"
+      MUMBLE_CONFIG_AUTOBANATTEMPTS: "10"
+      MUMBLE_CONFIG_AUTOBANTIMEFRAME: "120"
+      MUMBLE_CONFIG_AUTOBANTIME: "300"
