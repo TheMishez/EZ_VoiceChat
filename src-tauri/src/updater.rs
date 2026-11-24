@@ -82,8 +82,33 @@ fn newer(a: &[u64], b: &[u64]) -> bool {
     false
 }
 
+/// The first time a new version runs, ask Windows to refresh icons, so desktop and Start menu
+/// shortcuts show the current app icon instead of a cached old one.
+fn refresh_icons_after_update() {
+    let p = util::data_dir().join("last-version.txt");
+    let last = std::fs::read_to_string(&p).unwrap_or_default();
+    if last.trim() == current() {
+        return;
+    }
+    let _ = std::fs::write(&p, current());
+    if last.is_empty() {
+        return; // fresh install: nothing cached yet
+    }
+    #[cfg(windows)]
+    std::thread::spawn(|| unsafe {
+        use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+        SHChangeNotify(SHCNE_ASSOCCHANGED as _, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
+        let mut cmd = std::process::Command::new("ie4uinit.exe");
+        cmd.arg("-show");
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+        let _ = cmd.status();
+    });
+}
+
 pub fn init() {
     check_last_attempt();
+    refresh_icons_after_update();
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_secs(10));
         loop {
