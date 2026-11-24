@@ -279,6 +279,8 @@ async fn run(cfg: &Config, cmds: &mut mpsc::UnboundedReceiver<Cmd>, gen: u64) {
                     },
                     Some(Cmd::Chat(text)) => state.send_message(MessageTarget::Channel, &text).send(&mut con),
                     Some(Cmd::SelfState { mute, deaf }) => state.client_update().set_input_muted(mute).set_output_muted(deaf).send(&mut con),
+                    // TeamSpeak avatars go through its file-transfer system, which isn't supported.
+                    Some(Cmd::Avatar(_)) => Ok(()),
                 };
                 if let Err(e) = r {
                     session::chat("", &format!("The server refused that: {e}"), "system");

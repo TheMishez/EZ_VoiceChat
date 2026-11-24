@@ -30,6 +30,8 @@ pub struct User {
     pub self_deaf: bool,
     pub registered: bool,
     pub comment: String,
+    /// Profile picture hash ("" = none); the page fetches the picture with vc_avatars.
+    pub avatar: String,
 }
 
 #[derive(Serialize, Clone, Default, Debug)]
@@ -52,6 +54,8 @@ pub enum Cmd {
     Join(u64),
     Chat(String),
     SelfState { mute: bool, deaf: bool },
+    /// Your profile picture changed (empty = removed).
+    Avatar(Vec<u8>),
     Disconnect,
 }
 

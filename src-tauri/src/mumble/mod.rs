@@ -393,6 +393,26 @@ async fn run(cfg: &Config, cmds: &mut mpsc::UnboundedReceiver<Cmd>, gen: u64) ->
                     proto::USER_STATE => {
                         if let Ok(m) = proto::UserState::decode(&body[..]) {
                             merge_user(&mut view, &m);
+                            // Profile picture: sent in full, or only as a SHA-1 we may already know.
+                            if let Some(sess) = m.session {
+                                let pic = match (&m.texture, &m.texture_hash) {
+                                    (Some(t), _) => Some(crate::avatar::remember(t)),
+                                    (None, Some(h)) if h.is_empty() => Some(String::new()),
+                                    (None, Some(h)) => {
+                                        let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
+                                        if crate::avatar::known(&hex) {
+                                            Some(hex)
+                                        } else {
+                                            send(proto::REQUEST_BLOB, &|| proto::RequestBlob { session_texture: vec![sess] }.encode_to_vec());
+                                            None
+                                        }
+                                    }
+                                    _ => None,
+                                };
+                                if let (Some(p), Some(u)) = (pic, view.users.get_mut(&(sess as u64))) {
+                                    u.avatar = p;
+                                }
+                            }
                             dirty = true;
                         }
                     }
@@ -432,6 +452,13 @@ async fn run(cfg: &Config, cmds: &mut mpsc::UnboundedReceiver<Cmd>, gen: u64) ->
                         if mute || deaf {
                             let s = me;
                             send(proto::USER_STATE, &|| proto::UserState { session: s, self_mute: Some(mute), self_deaf: Some(deaf), ..Default::default() }.encode_to_vec());
+                        }
+                        if let Some(pic) = crate::avatar::own() {
+                            let s = me;
+                            if let Some(u) = s.and_then(|s| view.users.get_mut(&(s as u64))) {
+                                u.avatar = crate::avatar::remember(&pic);
+                            }
+                            send(proto::USER_STATE, &|| proto::UserState { session: s, texture: Some(pic.clone()), ..Default::default() }.encode_to_vec());
                         }
                         session::status("connected", format!("Connected to {}", view.server_name));
                         if !view.welcome.is_empty() {
@@ -497,6 +524,14 @@ async fn run(cfg: &Config, cmds: &mut mpsc::UnboundedReceiver<Cmd>, gen: u64) ->
                     Some(Cmd::SelfState { mute, deaf }) => {
                         let s = me;
                         send(proto::USER_STATE, &|| proto::UserState { session: s, self_mute: Some(mute), self_deaf: Some(deaf), ..Default::default() }.encode_to_vec());
+                    }
+                    Some(Cmd::Avatar(pic)) => {
+                        let s = me;
+                        if let Some(u) = s.and_then(|s| view.users.get_mut(&(s as u64))) {
+                            u.avatar = crate::avatar::remember(&pic);
+                            dirty = true;
+                        }
+                        send(proto::USER_STATE, &|| proto::UserState { session: s, texture: Some(pic.clone()), ..Default::default() }.encode_to_vec());
                     }
                 }
             }

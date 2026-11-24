@@ -89,6 +89,7 @@ struct Client {
     channel: u32,
     self_mute: bool,
     self_deaf: bool,
+    texture: Vec<u8>,
     tx: mpsc::UnboundedSender<Vec<u8>>,
     crypt: CryptState,
     ip: IpAddr,
@@ -322,6 +323,7 @@ fn user_state(id: u32, c: &Client) -> proto::UserState {
         channel_id: Some(c.channel),
         self_mute: Some(c.self_mute),
         self_deaf: Some(c.self_deaf),
+        texture: (!c.texture.is_empty()).then(|| c.texture.clone()),
         ..Default::default()
     }
 }
@@ -390,7 +392,7 @@ fn authenticate(state: &Mutex<State>, body: &[u8], ip: IpAddr, tx: &mpsc::Unboun
     for (id, c) in &st.clients {
         let _ = tx.send(proto::frame(proto::USER_STATE, &user_state(*id, c)));
     }
-    let client = Client { name, channel: LOBBY, self_mute: false, self_deaf: false, tx: tx.clone(), crypt, ip, udp: None, last_udp: None };
+    let client = Client { name, channel: LOBBY, self_mute: false, self_deaf: false, texture: Vec::new(), tx: tx.clone(), crypt, ip, udp: None, last_udp: None };
     let us = user_state(s, &client);
     st.clients.insert(s, client);
     broadcast(&st, &proto::frame(proto::USER_STATE, &us));
@@ -468,6 +470,12 @@ fn on_message(state: &Mutex<State>, s: u32, kind: u16, body: &[u8]) -> bool {
                 if v {
                     c.self_mute = true;
                     out.self_mute = Some(true);
+                }
+            }
+            if let Some(t) = m.texture {
+                if t.len() <= crate::avatar::MAX_BYTES {
+                    c.texture = t.clone();
+                    out.texture = Some(t);
                 }
             }
             if let Some(cm) = m.comment {

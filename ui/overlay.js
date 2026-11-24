@@ -12,6 +12,23 @@ let view = null;
 let talking = new Set();
 let meTalking = false;
 let self = { mute: false, deaf: false };
+const pics = {};
+const wanted = new Set();
+let picTimer = null;
+function pic(u) {
+  if (!u.avatar) return '';
+  if (pics[u.avatar]) return `<img src="${pics[u.avatar]}" alt="">`;
+  if (!wanted.has(u.avatar)) {
+    wanted.add(u.avatar);
+    clearTimeout(picTimer);
+    picTimer = setTimeout(async () => {
+      Object.assign(pics, await invoke('vc_avatars', { hashes: [...wanted] }));
+      wanted.clear();
+      render();
+    }, 50);
+  }
+  return '';
+}
 
 function render() {
   const list = document.getElementById('list');
@@ -29,7 +46,7 @@ function render() {
       .sort((a, b) => (b.on - a.on) || a.u.name.localeCompare(b.u.name));
     for (const p of people) {
       const muted = p.u.self_mute || p.u.muted || p.u.self_deaf || p.u.deafened;
-      rows.push(`<div class="r ${p.on ? 'talking' : 'idle'} ${p.me ? 'me' : ''}"><span class="av">${esc(initials(p.u.name))}</span><span class="n">${esc(p.u.name)}</span>${muted ? MIC_OFF : ''}</div>`);
+      rows.push(`<div class="r ${p.on ? 'talking' : 'idle'} ${p.me ? 'me' : ''}"><span class="av">${pic(p.u) || esc(initials(p.u.name))}</span><span class="n">${esc(p.u.name)}</span>${muted ? MIC_OFF : ''}</div>`);
     }
   }
   list.innerHTML = rows.join('');

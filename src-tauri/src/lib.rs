@@ -3,6 +3,7 @@
 //! The window only exists while it's open; closing it keeps you connected from the tray
 //! (voice keeps running in Rust, with no browser engine involved).
 mod audio;
+mod avatar;
 mod keys;
 mod mumble;
 mod ptt;
@@ -203,6 +204,21 @@ fn vc_latency() -> Value {
 // ------------------------------------------------------------------ overlay, updates, invites
 
 #[tauri::command]
+fn vc_set_avatar(data: Option<String>) -> Result<Option<String>, String> {
+    avatar::set_own(data)
+}
+
+#[tauri::command]
+fn vc_avatar_own() -> Option<String> {
+    avatar::own_data_url()
+}
+
+#[tauri::command]
+fn vc_avatars(hashes: Vec<String>) -> Value {
+    avatar::get(&hashes)
+}
+
+#[tauri::command]
 fn ov_get() -> Value {
     overlay::config_json()
 }
@@ -398,6 +414,9 @@ pub fn run() {
             srv_get,
             app_get_autostart,
             ov_get,
+            vc_set_avatar,
+            vc_avatar_own,
+            vc_avatars,
             ov_set,
             upd_state,
             upd_check,

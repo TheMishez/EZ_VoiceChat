@@ -16,6 +16,7 @@ pub const TEXT_MESSAGE: u16 = 11;
 pub const PERMISSION_DENIED: u16 = 12;
 pub const CRYPT_SETUP: u16 = 15;
 pub const PERMISSION_QUERY: u16 = 20;
+pub const REQUEST_BLOB: u16 = 23;
 pub const CODEC_VERSION: u16 = 21;
 pub const SERVER_CONFIG: u16 = 24;
 
@@ -155,10 +156,14 @@ pub struct UserState {
     pub self_mute: Option<bool>,
     #[prost(bool, optional, tag = "10")]
     pub self_deaf: Option<bool>,
+    #[prost(bytes = "vec", optional, tag = "11")]
+    pub texture: Option<Vec<u8>>,
     #[prost(string, optional, tag = "14")]
     pub comment: Option<String>,
     #[prost(string, optional, tag = "15")]
     pub hash: Option<String>,
+    #[prost(bytes = "vec", optional, tag = "17")]
+    pub texture_hash: Option<Vec<u8>>,
     #[prost(bool, optional, tag = "18")]
     pub priority_speaker: Option<bool>,
     #[prost(bool, optional, tag = "19")]
@@ -203,6 +208,12 @@ pub struct CryptSetup {
     pub client_nonce: Option<Vec<u8>>,
     #[prost(bytes = "vec", optional, tag = "3")]
     pub server_nonce: Option<Vec<u8>>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct RequestBlob {
+    #[prost(uint32, repeated, packed = "false", tag = "1")]
+    pub session_texture: Vec<u32>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]

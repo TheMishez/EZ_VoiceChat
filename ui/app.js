@@ -38,6 +38,93 @@ function applyVoicePrefs() {
 /* App options: rejoin the last server on startup, check for updates. */
 let appOpts = { autoconnect: true, last: null, checkUpdates: true };
 
+/* ---------------- profile pictures ---------------- */
+let myAvatar = null; // data: URL of your own picture
+const avatarCache = {}; // hash -> data: URL
+const avatarWanted = new Set();
+let avatarTimer = null;
+function avatarImg(u) {
+  if (!u.avatar) return '';
+  const url = avatarCache[u.avatar];
+  if (url) return `<img src="${url}" alt="">`;
+  if (!avatarWanted.has(u.avatar)) {
+    avatarWanted.add(u.avatar);
+    clearTimeout(avatarTimer);
+    avatarTimer = setTimeout(async () => {
+      const got = await invoke('vc_avatars', { hashes: [...avatarWanted] });
+      avatarWanted.clear();
+      Object.assign(avatarCache, got);
+      if (Object.keys(got).length && view) renderTree();
+    }, 50);
+  }
+  return '';
+}
+function paintMe(name) {
+  const el = $('#me-avatar');
+  if (myAvatar) el.innerHTML = `<img src="${myAvatar}" alt="">`;
+  else el.textContent = initials(name);
+}
+
+async function makeAvatar(file) {
+  const bmp = await createImageBitmap(file);
+  const side = Math.min(bmp.width, bmp.height);
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = '#2a2d34';
+  g.fillRect(0, 0, 128, 128);
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, 128, 128);
+  for (const q of [0.9, 0.82, 0.72, 0.6, 0.5]) {
+    const url = c.toDataURL('image/jpeg', q);
+    if (url.length * 0.75 < 45000) return url;
+  }
+  throw new Error('That picture is too detailed to shrink. Try another one.');
+}
+
+function openAvatarDialog() {
+  const m = modal(`
+    <h3>Profile picture</h3>
+    <div class="pic-row">
+      <div class="pic-preview" id="p-prev"></div>
+      <div>
+        <button class="btn primary" id="p-choose">Choose a picture</button>
+        <button class="btn ghost danger" id="p-remove" ${myAvatar ? '' : 'hidden'}>Remove</button>
+        <p class="small">Cropped to a square. Everyone on Mumble and EZ servers sees it. On TeamSpeak servers people see your initials.</p>
+      </div>
+    </div>
+    <input type="file" id="p-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+    <div class="actions"><button class="btn ghost" data-close>Done</button></div>`);
+  const prev = () => {
+    $('#p-prev', m.el).innerHTML = myAvatar ? `<img src="${myAvatar}" alt="">` : esc(initials(profile.nickname));
+    $('#p-remove', m.el).hidden = !myAvatar;
+  };
+  prev();
+  $('#p-choose', m.el).onclick = () => $('#p-file', m.el).click();
+  $('#p-file', m.el).onchange = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try {
+      const url = await makeAvatar(f);
+      const hash = await invoke('vc_set_avatar', { data: url });
+      myAvatar = url;
+      if (hash) avatarCache[hash] = url;
+      prev();
+      renderView();
+      toast('Profile picture updated');
+    } catch (err) {
+      toast(String(err.message || err), 'err');
+    }
+    e.target.value = '';
+  };
+  $('#p-remove', m.el).onclick = async () => {
+    await invoke('vc_set_avatar', { data: null });
+    myAvatar = null;
+    prev();
+    renderView();
+  };
+}
+
 /* Connection quality per person: id -> [loss %, jitter ms]. */
 let quality = {};
 
@@ -323,7 +410,7 @@ function renderView() {
     $('#me-name').textContent = profile.nickname || 'Set your name';
     $('#me-info').classList.toggle('unset', !profile.nickname);
     $('#me-sub').textContent = 'Not connected';
-    $('#me-avatar').textContent = initials(profile.nickname);
+    paintMe(profile.nickname);
     $('#chat-where').textContent = '';
     renderWelcome();
     return;
@@ -343,7 +430,7 @@ function renderView() {
   const mine = view.users[view.me];
   $('#me-name').textContent = mine ? mine.name : profile.nickname;
   $('#me-info').classList.remove('unset');
-  $('#me-avatar').textContent = initials(mine ? mine.name : profile.nickname);
+  paintMe(mine ? mine.name : profile.nickname);
   const myChan = mine ? view.channels[mine.channel] : null;
   $('#me-sub').textContent = myChan ? `In ${myChan.name || 'Root'}` : 'Connected';
   $('#chat-where').textContent = myChan ? '#' + (myChan.name || 'Root') : '';
@@ -371,7 +458,7 @@ function renderTree() {
     const lm = u.id !== view.me && voicePref(u).muted;
     return `
     <div class="user ${u.id === view.me ? 'me' : ''} ${lm ? 'lmuted' : ''} ${!lm && (talking.has(u.id) || (u.id === view.me && meTalking)) ? 'talking' : ''}" data-user="${u.id}">
-      <span class="dot">${esc(initials(u.name))}</span><span class="name">${esc(u.name)}</span>
+      <span class="dot">${avatarImg(u) || esc(initials(u.name))}</span><span class="name">${esc(u.name)}</span>
       <span class="st">${u.self_mute || u.muted ? icon('micOff') : ''}${u.self_deaf || u.deafened ? icon('headOff') : ''}${lm ? `<span title="Muted for you">${icon('spkOff')}</span>` : ''}${qualityIcon(u)}</span>
     </div>`;
   };
@@ -813,6 +900,8 @@ function bind() {
   $('#add-server').onclick = () => editServer(null);
   $('#btn-invite').onclick = openInviteDialog;
   $('#upd').onclick = () => invoke('upd_install');
+  $('#me-avatar').onclick = openAvatarDialog;
+  $('#me-avatar').title = 'Change your profile picture';
   $('#me-info').onclick = (e) => { if (e.target.id !== 'me-edit') editName(); };
   $('#btn-settings').onclick = openSettings;
   $('#btn-mute').onclick = () => invoke('vc_set_self', { mute: !me.mute, deaf: me.deaf && me.mute });
@@ -900,6 +989,7 @@ function bind() {
 async function boot() {
   bind();
   await loadStore();
+  myAvatar = await invoke('vc_avatar_own');
   renderBookmarks();
   const s = await invoke('vc_state');
   view = s.view;
