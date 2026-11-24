@@ -60,7 +60,16 @@ input, select { font: inherit; }
 #me { display: flex; align-items: center; gap: 8px; padding: 10px; margin: 8px; border-radius: 12px; background: var(--panel2); border: 1px solid var(--line); }
 .avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #2a2d34; font-weight: 700; flex: none; box-shadow: 0 0 0 2px transparent; transition: box-shadow .08s; }
 .avatar.talking { box-shadow: 0 0 0 2px var(--good), 0 0 12px color-mix(in srgb, var(--good) 60%, transparent); }
-.me-info { flex: 1; min-width: 0; }
+.me-info { flex: 1; min-width: 0; cursor: pointer; border-radius: 8px; padding: 2px 4px; margin: -2px -4px; }
+.me-info:hover { background: rgba(255,255,255,.05); }
+.me-info b { display: flex; align-items: center; gap: 5px; }
+.me-info b span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pen { width: 12px; height: 12px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linejoin: round; opacity: 0; }
+.me-info:hover .pen { opacity: 1; }
+.me-info.unset b span { color: var(--accent); }
+.me-info.unset .pen { opacity: 1; stroke: var(--accent); }
+.me-edit { width: 100%; height: 30px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); background: var(--bg); color: var(--text); padding: 0 8px; outline: none; font: inherit; font-size: 13px; }
+.me-info.editing { cursor: default; background: none; }
 .me-info b { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .me-info small { color: var(--muted); font-size: 11px; }
 .icon-btn { width: 30px; height: 30px; border-radius: 8px; border: 0; background: transparent; cursor: pointer; display: grid; place-items: center; color: var(--muted); flex: none; }

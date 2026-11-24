@@ -79,7 +79,7 @@ function renderBookmarks() {
 }
 
 function editServer(bm) {
-  const b = bm ? { ...bm } : { id: uid(), name: '', kind: 'mumble', host: '', port: '', nickname: profile.nickname || '', password: '' };
+  const b = bm ? { ...bm } : { id: uid(), name: '', kind: 'mumble', host: '', port: '', nickname: '', password: '' };
   const m = modal(`
     <h3>${bm ? 'Edit server' : 'Add a server'}</h3>
     <div class="field"><label>Server type</label>
@@ -89,7 +89,7 @@ function editServer(bm) {
       <div class="field"><label>Address</label><input class="input" id="f-host" value="${esc(b.host)}" placeholder="voice.example.com"></div>
       <div class="field"><label>Port</label><input class="input" id="f-port" value="${esc(b.port)}" placeholder=""></div>
     </div>
-    <div class="field"><label>Nickname</label><input class="input" id="f-nick" value="${esc(b.nickname)}" maxlength="64"></div>
+    <div class="field"><label>Nickname on this server (optional)</label><input class="input" id="f-nick" value="${esc(b.nickname)}" maxlength="64" placeholder="${esc(profile.nickname || 'Uses your name')}"></div>
     <div class="field"><label>Server password (if it has one)</label><input class="input" id="f-pass" type="password" value="${esc(b.password)}"></div>
     <p class="small" id="f-note"></p>
     <div class="actions">
@@ -119,14 +119,11 @@ function editServer(bm) {
     const hp = /^\[?([^\]]+?)\]?:(\d{2,5})$/.exec(b.host);
     if (hp && !b.port) { b.host = hp[1]; b.port = hp[2]; }
     if (!b.host) { toast('Enter the server address', 'err'); return false; }
-    if (!b.nickname) { toast('Pick a nickname', 'err'); return false; }
     return true;
   };
   const store = () => {
     const i = bookmarks.findIndex((x) => x.id === b.id);
     if (i >= 0) bookmarks[i] = b; else bookmarks.push(b);
-    profile.nickname = b.nickname;
-    invoke('vc_store_set', { name: 'profile', data: profile });
     saveBookmarks();
     renderBookmarks();
   };
@@ -139,12 +136,18 @@ function editServer(bm) {
 
 let lastConnect = null;
 async function connect(b, trust) {
+  const nickname = (b.nickname || '').trim() || profile.nickname;
+  if (!nickname) {
+    toast('Set your name first (bottom left)', 'err');
+    editName();
+    return;
+  }
   activeBm = b.id;
   lastConnect = b;
   renderBookmarks();
   $('#messages').innerHTML = '';
   try {
-    await invoke('vc_connect', { kind: b.kind, host: b.host, port: b.port ? Number(b.port) : null, nickname: b.nickname, password: b.password || null, trust: trust || null });
+    await invoke('vc_connect', { kind: b.kind, host: b.host, port: b.port ? Number(b.port) : null, nickname, password: b.password || null, trust: trust || null });
   } catch (e) {
     toast(String(e), 'err');
   }
@@ -160,7 +163,8 @@ function renderView() {
   $('#welcome').hidden = on;
   $('#chat-input').disabled = !on;
   if (!on) {
-    $('#me-name').textContent = profile.nickname || 'Not connected';
+    $('#me-name').textContent = profile.nickname || 'Set your name';
+    $('#me-info').classList.toggle('unset', !profile.nickname);
     $('#me-sub').textContent = 'Not connected';
     $('#me-avatar').textContent = initials(profile.nickname);
     $('#chat-where').textContent = '';
@@ -181,6 +185,7 @@ function renderView() {
   paintLatency();
   const mine = view.users[view.me];
   $('#me-name').textContent = mine ? mine.name : profile.nickname;
+  $('#me-info').classList.remove('unset');
   $('#me-avatar').textContent = initials(mine ? mine.name : profile.nickname);
   const myChan = mine ? view.channels[mine.channel] : null;
   $('#me-sub').textContent = myChan ? `In ${myChan.name || 'Root'}` : 'Connected';
@@ -293,6 +298,49 @@ function addChat(m) {
   host.appendChild(el);
   while (host.children.length > 400) host.firstChild.remove();
   host.scrollTop = host.scrollHeight;
+}
+
+/* ---------------- your name ---------------- */
+// The name you join servers with. A server bookmark can still set its own nickname.
+function editName() {
+  const box = $('#me-info');
+  const inp = $('#me-edit');
+  if (box.classList.contains('editing')) return;
+  box.classList.add('editing');
+  $('b', box).hidden = true;
+  $('small', box).hidden = true;
+  inp.hidden = false;
+  inp.value = profile.nickname || '';
+  inp.focus();
+  inp.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    box.classList.remove('editing');
+    $('b', box).hidden = false;
+    $('small', box).hidden = false;
+    inp.hidden = true;
+    const name = inp.value.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 64);
+    if (save && name && name !== profile.nickname) {
+      const old = profile.nickname;
+      profile.nickname = name;
+      await invoke('vc_store_set', { name: 'profile', data: profile });
+      // Older bookmarks copied the name in; keep them following it.
+      let changed = false;
+      for (const b of bookmarks) if (old && b.nickname === old) { b.nickname = ''; changed = true; }
+      if (changed) saveBookmarks();
+      toast(view ? 'Saved. You\'ll use this name the next time you join a server.' : `You'll join servers as ${name}`);
+    } else if (save && !name) {
+      toast('Your name can\'t be empty', 'err');
+    }
+    renderView();
+  };
+  inp.onkeydown = (e) => {
+    if (e.key === 'Enter') finish(true);
+    else if (e.key === 'Escape') { e.stopPropagation(); finish(false); }
+  };
+  inp.onblur = () => finish(true);
 }
 
 /* ---------------- self mute / deafen ---------------- */
@@ -467,7 +515,7 @@ async function serverSection(host) {
         render();
       };
       $('#v-join', host).onclick = () => {
-        connect({ id: 'local', kind: 'mumble', host: '127.0.0.1', port: String(st.port), nickname: profile.nickname || 'Host', password: s.password });
+        connect({ id: 'local', kind: 'mumble', host: '127.0.0.1', port: String(st.port), nickname: '', password: s.password });
         toast('Joining your local server');
       };
       return;
@@ -509,6 +557,7 @@ function bind() {
   $('#add-server').innerHTML = icon('plus');
   $('#btn-settings').innerHTML = icon('gear');
   $('#add-server').onclick = () => editServer(null);
+  $('#me-info').onclick = (e) => { if (e.target.id !== 'me-edit') editName(); };
   $('#btn-settings').onclick = openSettings;
   $('#btn-mute').onclick = () => invoke('vc_set_self', { mute: !me.mute, deaf: me.deaf && me.mute });
   $('#btn-deaf').onclick = () => invoke('vc_set_self', { mute: !me.deaf, deaf: !me.deaf });
