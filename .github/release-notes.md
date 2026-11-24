@@ -1,13 +1,5 @@
-First release of **EZ VoiceChat**: low-latency voice chat for Windows that joins both Mumble and TeamSpeak 3 servers.
+**New: profile pictures.** Click the round avatar in the bottom-left corner to pick one. Everyone on Mumble and EZ servers (and people using the regular Mumble app) sees it in the channel list and the in-game overlay. On TeamSpeak 3 servers people still see your initials.
 
-**Install:** download `EZ VoiceChat_0.1.0_x64-setup.exe` below and run it. Windows may show a SmartScreen warning because the app isn't code-signed yet: click **More info → Run anyway**.
+**Install or update:** if you already have EZ VoiceChat, it updates itself; look for **Restart to update** in the title bar. Otherwise download `EZ VoiceChat_0.1.1_x64-setup.exe` below. If Windows shows a SmartScreen warning, click **More info → Run anyway**.
 
-**Highlights**
-- Opus voice with low-latency Windows audio and an adaptive jitter buffer, plus a live voice-delay readout
-- Push-to-talk, mute and deafen hotkeys that work in game without input lag
-- In-game overlay showing who's talking
-- Invite links, sound cues, per-person volume and "mute for me"
-- Built-in local test server, and the EZ server package (server/) for your own Linode
-- Updates itself from new releases
-
-TeamSpeak 3 support uses an unofficial open-source implementation; TeamSpeak 5/6-only servers aren't supported.
+**EZ server owners:** `server/docker-compose.yml` now limits profile pictures to 128 KB. Download the new file and run `docker compose up -d` in `/opt/ez-voice`.

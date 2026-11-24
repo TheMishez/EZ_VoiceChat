@@ -1,6 +1,6 @@
 [package]
 name = "ez-voicechat"
-version = "0.1.0"
+version = "0.1.1"
 description = "EZ VoiceChat: low-latency voice chat for Mumble and TeamSpeak 3 servers"
 authors = ["EZGGco"]
 license = "MIT"
