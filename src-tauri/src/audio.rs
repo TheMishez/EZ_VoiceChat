@@ -80,6 +80,12 @@ pub struct Settings {
     pub bitrate: u32,
     /// Ask Windows for its smallest audio period (about 3 ms instead of 10 ms).
     pub low_latency: bool,
+    /// Hotkeys that toggle mute / deafen (any mode).
+    pub mute_key: String,
+    pub deaf_key: String,
+    /// Short sounds for joins, leaves, mute, push-to-talk and connecting.
+    pub cues: bool,
+    pub cue_volume: f32,
 }
 
 impl Default for Settings {
@@ -97,6 +103,10 @@ impl Default for Settings {
             frame_ms: 10,
             bitrate: 64000,
             low_latency: true,
+            mute_key: String::new(),
+            deaf_key: String::new(),
+            cues: true,
+            cue_volume: 0.6,
         }
     }
 }
@@ -115,6 +125,57 @@ static SETTINGS: Mutex<Option<Settings>> = parking_lot::const_mutex(None);
 static SINK: Mutex<Option<Box<dyn VoiceSink>>> = parking_lot::const_mutex(None);
 static SOURCE: Mutex<Option<Arc<dyn VoiceSource>>> = parking_lot::const_mutex(None);
 static LOOPBACK: Mutex<Option<VecDeque<f32>>> = parking_lot::const_mutex(None);
+/// Sound cues waiting to be played (mono, 48 kHz). Mixed in even while deafened.
+static CUES: Mutex<VecDeque<f32>> = parking_lot::const_mutex(VecDeque::new());
+
+#[derive(Clone, Copy, Debug)]
+pub enum Cue {
+    Join,
+    Leave,
+    Mute,
+    Unmute,
+    Deafen,
+    Undeafen,
+    PttOn,
+    PttOff,
+    Connected,
+    Disconnected,
+}
+
+/// Plays a short cue: a few soft sine notes (frequency Hz, length ms).
+pub fn cue(c: Cue) {
+    let (on, vol) = SETTINGS.lock().as_ref().map(|s| (s.cues, s.cue_volume)).unwrap_or((true, 0.6));
+    if !on || vol <= 0.0 {
+        return;
+    }
+    let notes: &[(f32, f32)] = match c {
+        Cue::Join => &[(660.0, 70.0), (880.0, 90.0)],
+        Cue::Leave => &[(880.0, 70.0), (660.0, 90.0)],
+        Cue::Mute => &[(520.0, 60.0), (390.0, 80.0)],
+        Cue::Unmute => &[(390.0, 60.0), (520.0, 80.0)],
+        Cue::Deafen => &[(330.0, 70.0), (247.0, 100.0)],
+        Cue::Undeafen => &[(247.0, 70.0), (330.0, 100.0)],
+        Cue::PttOn => &[(1000.0, 35.0)],
+        Cue::PttOff => &[(750.0, 35.0)],
+        Cue::Connected => &[(523.0, 70.0), (659.0, 70.0), (784.0, 110.0)],
+        Cue::Disconnected => &[(784.0, 80.0), (523.0, 120.0)],
+    };
+    let amp = 0.22 * vol.clamp(0.0, 1.5);
+    let mut out = Vec::new();
+    for &(f, ms) in notes {
+        let n = (ms * RATE as f32 / 1000.0) as usize;
+        let fade = (RATE as usize / 200).min(n / 2); // 5 ms fades, no clicks
+        for i in 0..n {
+            let env = if i < fade { i as f32 / fade as f32 } else if i > n - fade { (n - i) as f32 / fade as f32 } else { 1.0 };
+            let t = i as f32 / RATE as f32;
+            out.push((t * f * std::f32::consts::TAU).sin() * amp * env);
+        }
+    }
+    let mut q = CUES.lock();
+    if q.len() < RATE as usize * 2 {
+        q.extend(out);
+    }
+}
 static SELF_MUTE: AtomicBool = AtomicBool::new(false);
 static SELF_DEAF: AtomicBool = AtomicBool::new(false);
 static MIC_TEST: AtomicBool = AtomicBool::new(false);
@@ -130,7 +191,7 @@ pub fn settings() -> Settings {
 pub fn set_settings(s: Settings) {
     let old = SETTINGS.lock().replace(s.clone());
     util::write_json(&settings_path(), &serde_json::to_value(&s).unwrap_or_default());
-    crate::ptt::configure(s.mode == "ptt", &s.ptt_key);
+    crate::ptt::configure(s.mode == "ptt", &s.ptt_key, &s.mute_key, &s.deaf_key);
     let devices_changed = old.map(|o| o.input_device != s.input_device || o.output_device != s.output_device || o.low_latency != s.low_latency).unwrap_or(true);
     if devices_changed {
         rebuild();
@@ -217,7 +278,7 @@ fn find(input: bool, name: &str) -> Option<cpal::Device> {
 pub fn start() {
     *SETTINGS.lock() = Some(load_settings());
     let s = settings();
-    crate::ptt::configure(s.mode == "ptt", &s.ptt_key);
+    crate::ptt::configure(s.mode == "ptt", &s.ptt_key, &s.mute_key, &s.deaf_key);
     let (tx, rx) = mpsc::channel::<()>();
     let _ = CTL.set(Mutex::new(tx.clone()));
     std::thread::Builder::new()
@@ -301,6 +362,7 @@ struct Capture {
     hang: u32,
     ptt_tail: u32,
     was_tx: bool,
+    ptt_was: bool,
 }
 
 impl Capture {
@@ -318,6 +380,7 @@ impl Capture {
             hang: 0,
             ptt_tail: 0,
             was_tx: false,
+            ptt_was: false,
         }
     }
 
@@ -381,7 +444,14 @@ impl Capture {
         let open = match st.mode.as_str() {
             "continuous" => true,
             "ptt" => {
-                if crate::ptt::held() {
+                let held = crate::ptt::held();
+                if held != self.ptt_was {
+                    self.ptt_was = held;
+                    if !SELF_MUTE.load(Ordering::Relaxed) {
+                        cue(if held { Cue::PttOn } else { Cue::PttOff });
+                    }
+                }
+                if held {
                     self.ptt_tail = st.ptt_release_ms / 10;
                     true
                 } else if self.ptt_tail > 0 {
@@ -509,6 +579,16 @@ impl Playback {
         if !SELF_DEAF.load(Ordering::Relaxed) {
             if let Some(s) = SOURCE.lock().clone() {
                 s.mix(buf);
+            }
+        }
+        {
+            let mut q = CUES.lock();
+            if !q.is_empty() {
+                for f in 0..frames {
+                    let Some(v) = q.pop_front() else { break };
+                    buf[f * 2] += v;
+                    buf[f * 2 + 1] += v;
+                }
             }
         }
         if let Some(lb) = LOOPBACK.lock().as_mut() {

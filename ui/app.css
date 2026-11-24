@@ -172,3 +172,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .warn-list { margin: 0 0 14px; padding-left: 18px; color: var(--muted); font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
 .warn-list b { color: var(--text); }
 .seg button:disabled { opacity: .5; cursor: default; }
+.hk { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.hk > span { flex: 1; font-size: 13px; }
+.hk .key-btn { min-width: 150px; }
+.user.lmuted .name { color: var(--muted); text-decoration: line-through; }
+.user .st span { display: inline-flex; color: var(--muted); }

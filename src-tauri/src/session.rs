@@ -94,7 +94,31 @@ pub fn view_json() -> serde_json::Value {
     }
 }
 
+/// Who else was in my channel at the last publish: (server generation, my channel, users).
+static MEMBERS: Mutex<Option<(u64, u64, Vec<u64>)>> = parking_lot::const_mutex(None);
+
 pub fn publish() {
+    // Join / leave sounds for people entering or leaving the channel you're in.
+    let now = VIEW.lock().as_ref().and_then(|v| {
+        let me = v.me?;
+        let ch = v.users.get(&me)?.channel;
+        let mut ids: Vec<u64> = v.users.values().filter(|u| u.channel == ch && u.id != me).map(|u| u.id).collect();
+        ids.sort_unstable();
+        Some((generation(), ch, ids))
+    });
+    {
+        let mut last = MEMBERS.lock();
+        if let (Some((g0, c0, old)), Some((g1, c1, new))) = (last.as_ref(), now.as_ref()) {
+            if g0 == g1 && c0 == c1 {
+                if new.iter().any(|x| !old.contains(x)) {
+                    crate::audio::cue(crate::audio::Cue::Join);
+                } else if old.iter().any(|x| !new.contains(x)) {
+                    crate::audio::cue(crate::audio::Cue::Leave);
+                }
+            }
+        }
+        *last = now;
+    }
     crate::util::emit("vc-state", view_json());
     crate::tray_refresh();
 }
@@ -107,6 +131,12 @@ pub fn last_status() -> serde_json::Value {
 
 pub fn status(phase: &str, message: impl Into<String>) {
     let m: String = message.into();
+    let prev = LAST_STATUS.lock().as_ref().and_then(|v| v["phase"].as_str().map(String::from)).unwrap_or_default();
+    if phase == "connected" && prev != "connected" {
+        crate::audio::cue(crate::audio::Cue::Connected);
+    } else if prev == "connected" && phase != "connected" {
+        crate::audio::cue(crate::audio::Cue::Disconnected);
+    }
     *LAST_STATUS.lock() = Some(json!({ "phase": phase, "message": m.clone() }));
     if phase == "error" || phase == "disconnected" {
         crate::util::log(format!("{phase}: {m}"));

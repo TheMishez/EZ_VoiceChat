@@ -10,6 +10,34 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+/* Per-person volume and "mute for me", remembered by server + name (session ids change on
+   every connect). */
+let voices = {};
+const applied = new Map(); // session id -> key we applied for it
+const voiceKey = (u) => view ? `${view.kind}|${view.host}|${String(u.name).toLowerCase()}` : '';
+const voicePref = (u) => voices[voiceKey(u)] || { volume: 1, muted: false };
+function setVoicePref(u, p) {
+  const k = voiceKey(u);
+  if (p.volume === 1 && !p.muted) delete voices[k]; else voices[k] = p;
+  invoke('vc_store_set', { name: 'voices', data: voices });
+  invoke('vc_user_volume', { user: u.id, volume: p.muted ? 0 : p.volume });
+  applied.set(u.id, k);
+}
+function applyVoicePrefs() {
+  if (!view) { applied.clear(); return; }
+  for (const u of Object.values(view.users)) {
+    if (u.id === view.me) continue;
+    const k = voiceKey(u);
+    if (applied.get(u.id) === k) continue;
+    applied.set(u.id, k);
+    const p = voicePref(u);
+    invoke('vc_user_volume', { user: u.id, volume: p.muted ? 0 : p.volume });
+  }
+}
+
+/* App options: rejoin the last server on startup. */
+let appOpts = { autoconnect: true, last: null };
+
 const I = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
@@ -18,6 +46,7 @@ const I = {
   headOff: '<path d="M3 3l18 18"/><path d="M4 15v-3a8 8 0 0 1 12.3-6.7M19.6 9.4A8 8 0 0 1 20 12v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   hash: '<path d="M5 9h14M5 15h14M10 3L8 21M16 3l-2 18"/>',
+  spkOff: '<path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l4 6M21 9l-4 6"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24">${I[n] || ''}</svg>`;
@@ -65,6 +94,8 @@ document.addEventListener('mousedown', (e) => { if (!e.target.closest('#menu')) 
 async function loadStore() {
   bookmarks = (await invoke('vc_store_get', { name: 'bookmarks' })) || [];
   profile = (await invoke('vc_store_get', { name: 'profile' })) || { nickname: '' };
+  voices = (await invoke('vc_store_get', { name: 'voices' })) || {};
+  appOpts = { autoconnect: true, last: null, ...((await invoke('vc_store_get', { name: 'app' })) || {}) };
   if (!Array.isArray(bookmarks)) bookmarks = [];
 }
 const saveBookmarks = () => invoke('vc_store_set', { name: 'bookmarks', data: bookmarks });
@@ -144,6 +175,8 @@ async function connect(b, trust) {
   }
   activeBm = b.id;
   lastConnect = b;
+  appOpts.last = b.id === 'local' ? null : b.id;
+  invoke('vc_store_set', { name: 'app', data: appOpts });
   renderBookmarks();
   $('#messages').innerHTML = '';
   try {
@@ -210,11 +243,14 @@ function renderTree() {
   }
   for (const list of byChan.values()) list.sort((a, b) => a.name.localeCompare(b.name));
   const mineCh = view.users[view.me] ? view.users[view.me].channel : null;
-  const userHtml = (u) => `
-    <div class="user ${u.id === view.me ? 'me' : ''} ${talking.has(u.id) || (u.id === view.me && meTalking) ? 'talking' : ''}" data-user="${u.id}">
+  const userHtml = (u) => {
+    const lm = u.id !== view.me && voicePref(u).muted;
+    return `
+    <div class="user ${u.id === view.me ? 'me' : ''} ${lm ? 'lmuted' : ''} ${!lm && (talking.has(u.id) || (u.id === view.me && meTalking)) ? 'talking' : ''}" data-user="${u.id}">
       <span class="dot">${esc(initials(u.name))}</span><span class="name">${esc(u.name)}</span>
-      <span class="st">${u.self_mute || u.muted ? icon('micOff') : ''}${u.self_deaf || u.deafened ? icon('headOff') : ''}</span>
+      <span class="st">${u.self_mute || u.muted ? icon('micOff') : ''}${u.self_deaf || u.deafened ? icon('headOff') : ''}${lm ? `<span title="Muted for you">${icon('spkOff')}</span>` : ''}</span>
     </div>`;
+  };
   const chanHtml = (c, depth) => {
     const children = kids.get(c.id) || [];
     const us = byChan.get(c.id) || [];
@@ -228,7 +264,7 @@ function renderTree() {
 function paintTalking() {
   $$('#tree .user').forEach((el) => {
     const id = Number(el.dataset.user);
-    el.classList.toggle('talking', talking.has(id) || (view && id === view.me && meTalking));
+    el.classList.toggle('talking', !el.classList.contains('lmuted') && (talking.has(id) || (view && id === view.me && meTalking)));
   });
   $('#me-avatar').classList.toggle('talking', meTalking);
 }
@@ -376,6 +412,16 @@ async function openSettings() {
       <div class="row"><button class="key-btn" id="s-key">${esc(keyLabel(st.ptt_key))}</button>
       <span class="small">Release delay</span><input class="input" style="width:90px" id="s-rel" type="number" min="0" max="1000" step="10" value="${st.ptt_release_ms}"><span class="small">ms</span></div>
       <span class="small">Works in every game without adding input lag: the key still reaches the game. Mouse 3–5 work too.</span></div>
+    <div class="section">Hotkeys</div>
+    <p class="small" style="margin:-4px 0 10px">Work everywhere, including in game, without adding input lag.</p>
+    <div class="hk"><span>Mute / unmute mic</span><button class="key-btn" id="s-mute-key"></button><button class="icon-btn" id="s-mute-clr" title="Remove">✕</button></div>
+    <div class="hk"><span>Deafen / undeafen</span><button class="key-btn" id="s-deaf-key"></button><button class="icon-btn" id="s-deaf-clr" title="Remove">✕</button></div>
+    <div class="section">Sounds</div>
+    <label class="switch"><input type="checkbox" id="s-cues" ${st.cues ? 'checked' : ''}><span></span>Play sounds for joins, leaves, mute and push-to-talk</label>
+    <div class="field"><label>Sound volume <span class="small" id="s-cuevol-v"></span></label><input type="range" id="s-cuevol" min="0" max="1.5" step="0.05" value="${st.cue_volume}"></div>
+    <div class="section">App</div>
+    <label class="switch"><input type="checkbox" id="s-auto"><span></span>Start with Windows (in the tray)</label>
+    <label class="switch"><input type="checkbox" id="s-rejoin"><span></span>Rejoin my last server when the app starts</label>
     <div class="section">Processing</div>
     <label class="switch"><input type="checkbox" id="s-ns" ${st.noise_suppression ? 'checked' : ''}><span></span>Noise suppression (RNNoise)</label>
     <div class="field"><label>Microphone volume <span class="small" id="s-gain-v"></span></label><input type="range" id="s-gain" min="0" max="3" step="0.05" value="${st.input_gain}"></div>
@@ -424,29 +470,51 @@ async function openSettings() {
   $('#s-br', el).onchange = (e) => { s.bitrate = Number(e.target.value); save(); toast('Applies the next time you connect'); };
   $('#s-rel', el).onchange = (e) => { s.ptt_release_ms = Math.max(0, Math.min(1000, Number(e.target.value) || 0)); save(); };
   $('#s-test', el).onchange = (e) => invoke('vc_mic_test', { on: e.target.checked });
-  // Push-to-talk key: record the next key or mouse button (3 = middle, 4/5 = side buttons).
-  $('#s-key', el).onclick = () => {
-    const b = $('#s-key', el);
-    recording = true;
-    b.classList.add('rec');
-    b.textContent = 'Press a key or mouse button… (Esc cancels)';
-    const done = (code) => {
-      document.removeEventListener('keydown', onKey, true);
-      document.removeEventListener('mousedown', onMouse, true);
-      setTimeout(() => (recording = false), 100);
-      b.classList.remove('rec');
-      if (code) { s.ptt_key = code; save(); }
-      b.textContent = keyLabel(s.ptt_key);
+  // Key bindings: record the next key or mouse button (3 = middle, 4/5 = side buttons).
+  const bindKey = (btnId, field, clearId) => {
+    const b = $(btnId, el);
+    const clr = clearId && $(clearId, el);
+    const show = () => { b.textContent = keyLabel(s[field]); if (clr) clr.hidden = !s[field]; };
+    show();
+    if (clr) clr.onclick = () => { s[field] = ''; save(); show(); };
+    b.onclick = () => {
+      recording = true;
+      b.classList.add('rec');
+      b.textContent = 'Press a key or mouse button… (Esc cancels)';
+      const done = (code) => {
+        document.removeEventListener('keydown', onKey, true);
+        document.removeEventListener('mousedown', onMouse, true);
+        setTimeout(() => (recording = false), 100);
+        b.classList.remove('rec');
+        if (code) {
+          const other = ['ptt_key', 'mute_key', 'deaf_key'].find((f) => f !== field && s[f] === code);
+          if (other) toast('That key is already used for another hotkey', 'err');
+          else { s[field] = code; save(); }
+        }
+        show();
+      };
+      const onKey = (e) => { e.preventDefault(); e.stopPropagation(); done(e.code === 'Escape' ? null : e.code); };
+      const onMouse = (e) => {
+        const n = { 1: 'Mouse3', 3: 'Mouse4', 4: 'Mouse5' }[e.button];
+        if (!n) return;
+        e.preventDefault(); e.stopPropagation(); done(n);
+      };
+      document.addEventListener('keydown', onKey, true);
+      document.addEventListener('mousedown', onMouse, true);
     };
-    const onKey = (e) => { e.preventDefault(); e.stopPropagation(); done(e.code === 'Escape' ? null : e.code); };
-    const onMouse = (e) => {
-      const n = { 1: 'Mouse3', 3: 'Mouse4', 4: 'Mouse5' }[e.button];
-      if (!n) return;
-      e.preventDefault(); e.stopPropagation(); done(n);
-    };
-    document.addEventListener('keydown', onKey, true);
-    document.addEventListener('mousedown', onMouse, true);
   };
+  bindKey('#s-key', 'ptt_key');
+  bindKey('#s-mute-key', 'mute_key', '#s-mute-clr');
+  bindKey('#s-deaf-key', 'deaf_key', '#s-deaf-clr');
+  $('#s-cues', el).onchange = (e) => { s.cues = e.target.checked; save(); };
+  $('#s-cuevol', el).oninput = (e) => { s.cue_volume = Number(e.target.value); $('#s-cuevol-v', el).textContent = pct(s.cue_volume); save(); };
+  $('#s-cuevol-v', el).textContent = pct(s.cue_volume);
+  invoke('app_get_autostart').then((on) => ($('#s-auto', el).checked = on));
+  $('#s-auto', el).onchange = async (e) => {
+    try { await invoke('app_set_autostart', { on: e.target.checked }); } catch (err) { toast(String(err), 'err'); e.target.checked = !e.target.checked; }
+  };
+  $('#s-rejoin', el).checked = appOpts.autoconnect;
+  $('#s-rejoin', el).onchange = (e) => { appOpts.autoconnect = e.target.checked; invoke('vc_store_set', { name: 'app', data: appOpts }); };
   serverSection($('#srv', el));
   const meterTimer = setInterval(async () => {
     if (!el.isConnected) return;
@@ -561,7 +629,13 @@ function bind() {
   $('#btn-settings').onclick = openSettings;
   $('#btn-mute').onclick = () => invoke('vc_set_self', { mute: !me.mute, deaf: me.deaf && me.mute });
   $('#btn-deaf').onclick = () => invoke('vc_set_self', { mute: !me.deaf, deaf: !me.deaf });
-  $('#btn-disconnect').onclick = () => { activeBm = null; renderBookmarks(); invoke('vc_disconnect'); };
+  $('#btn-disconnect').onclick = () => {
+    activeBm = null;
+    renderBookmarks();
+    appOpts.last = null; // you left on purpose: don't rejoin on the next start
+    invoke('vc_store_set', { name: 'app', data: appOpts });
+    invoke('vc_disconnect');
+  };
   $$('[data-win]').forEach((b) => (b.onclick = () => invoke('win_' + b.dataset.win)));
 
   $('#bookmarks').onclick = (e) => {
@@ -603,13 +677,25 @@ function bind() {
     e.preventDefault();
     const id = Number(u.dataset.user);
     if (id === view.me) return;
-    const cur = userVolumes[id] ?? 1;
-    menu(e.clientX, e.clientY, `<div class="vol">Volume for ${esc(view.users[id]?.name || '')}: <b id="mv">${Math.round(cur * 100)}%</b><input type="range" min="0" max="3" step="0.05" value="${cur}" id="mvr"></div>`, (m) => {
+    const usr = view.users[id];
+    if (!usr) return;
+    const p = { ...voicePref(usr) };
+    menu(e.clientX, e.clientY, `<div class="vol">Volume for ${esc(usr.name)}: <b id="mv">${Math.round(p.volume * 100)}%</b><input type="range" min="0" max="3" step="0.05" value="${p.volume}" id="mvr"></div>
+      <button data-a="mute">${p.muted ? 'Unmute for me' : 'Mute for me'}</button>
+      ${p.volume !== 1 ? '<button data-a="reset">Reset volume</button>' : ''}`, (m) => {
       $('#mvr', m).oninput = (ev) => {
-        const v = Number(ev.target.value);
-        userVolumes[id] = v;
-        $('#mv', m).textContent = Math.round(v * 100) + '%';
-        invoke('vc_user_volume', { user: id, volume: v });
+        p.volume = Number(ev.target.value);
+        $('#mv', m).textContent = Math.round(p.volume * 100) + '%';
+        setVoicePref(usr, p);
+      };
+      m.onclick = (ev) => {
+        const a = ev.target.closest('[data-a]')?.dataset.a;
+        if (!a) return;
+        if (a === 'mute') p.muted = !p.muted;
+        if (a === 'reset') p.volume = 1;
+        setVoicePref(usr, p);
+        m.hidden = true;
+        renderTree();
       };
     });
   };
@@ -622,7 +708,6 @@ function bind() {
     inp.value = '';
   };
 }
-const userVolumes = {};
 
 async function boot() {
   bind();
@@ -634,9 +719,16 @@ async function boot() {
   setStatus(s.status || {});
   renderSelf();
   renderView();
-  listen('vc-state', (v) => { view = v; renderView(); });
+  listen('vc-state', (v) => { view = v; applyVoicePrefs(); renderView(); });
+  applyVoicePrefs();
+  // Rejoin the last server you were on (unless you disconnected on purpose).
+  if (!view && appOpts.autoconnect && appOpts.last) {
+    const b = bookmarks.find((x) => x.id === appOpts.last);
+    if (b) connect(b);
+  }
   listen('vc-status', (st) => {
     setStatus(st);
+    if (st.phase === 'connected') applied.clear();
     if (st.phase === 'disconnected' || st.phase === 'error') { if (!view) { activeBm = null; renderBookmarks(); } }
   });
   listen('vc-chat', addChat);

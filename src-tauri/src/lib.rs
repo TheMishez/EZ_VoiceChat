@@ -68,10 +68,33 @@ pub fn tray_refresh() {
 }
 
 fn set_self(mute: bool, deaf: bool) {
+    let (m0, d0) = audio::self_state();
+    let (m1, d1) = (mute || deaf, deaf);
+    if d1 != d0 {
+        audio::cue(if d1 { audio::Cue::Deafen } else { audio::Cue::Undeafen });
+    } else if m1 != m0 {
+        audio::cue(if m1 { audio::Cue::Mute } else { audio::Cue::Unmute });
+    }
     audio::set_self(mute, deaf);
     session::send(session::Cmd::SelfState { mute: mute || deaf, deaf });
     util::emit("vc-self", json!({ "mute": mute || deaf, "deaf": deaf }));
     tray_refresh();
+}
+
+/// Hotkey: mute / unmute your mic (undeafens too, like the button).
+pub fn toggle_mute() {
+    let (m, d) = audio::self_state();
+    if d {
+        set_self(false, false);
+    } else {
+        set_self(!m, false);
+    }
+}
+
+/// Hotkey: deafen / undeafen.
+pub fn toggle_deaf() {
+    let (_, d) = audio::self_state();
+    set_self(!d, !d);
 }
 
 fn quit() {
@@ -176,6 +199,19 @@ fn vc_latency() -> Value {
 // ------------------------------------------------------------------ local test server
 
 #[tauri::command]
+fn app_get_autostart() -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    util::app().autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn app_set_autostart(on: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let al = util::app().autolaunch();
+    if on { al.enable() } else { al.disable() }.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn srv_get() -> Value {
     let s = mumble::server::settings();
     json!({
@@ -214,14 +250,14 @@ fn vc_mic_test(on: bool) {
 #[tauri::command]
 fn vc_store_get(name: String) -> Value {
     match name.as_str() {
-        "bookmarks" | "profile" => util::read_json(&store_path(&format!("{name}.json"))).unwrap_or(Value::Null),
+        "bookmarks" | "profile" | "voices" | "app" => util::read_json(&store_path(&format!("{name}.json"))).unwrap_or(Value::Null),
         _ => Value::Null,
     }
 }
 
 #[tauri::command]
 fn vc_store_set(name: String, data: Value) {
-    if matches!(name.as_str(), "bookmarks" | "profile") {
+    if matches!(name.as_str(), "bookmarks" | "profile" | "voices" | "app") {
         util::write_json(&store_path(&format!("{name}.json")), &data);
     }
 }
@@ -262,6 +298,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|_a, _args, _cwd| show_main()))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         // Push-to-talk registers its own Raw Input; the window library must not take it over.
         .device_event_filter(tauri::DeviceEventFilter::Always)
         .invoke_handler(tauri::generate_handler![
@@ -285,6 +322,8 @@ pub fn run() {
             app_open_external,
             vc_latency,
             srv_get,
+            app_get_autostart,
+            app_set_autostart,
             srv_accept_terms,
             srv_save,
             srv_start,
