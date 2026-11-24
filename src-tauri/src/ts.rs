@@ -164,6 +164,7 @@ fn snapshot(state: &tsclientlib::data::Connection, host: &str) -> View {
                 self_deaf: c.output_muted,
                 registered: false,
                 comment: String::new(),
+                avatar: String::new(),
             },
         );
     }
