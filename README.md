@@ -25,7 +25,7 @@ Want your own server? See [`server/`](server/) for the **EZ server**: a tuned Mu
 ## Releasing an update
 Installed copies update themselves from GitHub Releases:
 1. Bump `version` in `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` (e.g. 0.2.0).
-2. Push, then publish a release tagged `v0.2.0`. CI builds the installer and attaches it.
+2. Push, then either publish a release tagged `v0.2.0` on GitHub, or push the tag (`git tag v0.2.0 && git push origin v0.2.0`). CI builds the installer and publishes it (update `.github/release-notes.md` first if you go the tag route).
 3. Within a few hours (or on "Check for updates") the app downloads it and shows "Restart to update".
 
 ## Invite links
